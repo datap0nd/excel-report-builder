@@ -374,6 +374,64 @@ function Assert-RegistrationRemoved {
     }
 }
 
+function Remove-PerUserComActivationKeys {
+    param([Parameter(Mandatory = $true)][Microsoft.Win32.RegistryView[]]$Views)
+
+    $paths = @(
+        "Software\Classes\CLSID\{F953480C-A73C-4121-9E21-18676EC34CE8}",
+        "Software\Classes\CLSID\{A3F4E10D-0DD1-420E-8B6F-E0A654BBEA16}",
+        "Software\Classes\ExcelReportBuilder.AddIn",
+        "Software\Classes\ExcelReportBuilder.TaskPaneHost"
+    )
+
+    foreach ($view in $Views) {
+        $root = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+            [Microsoft.Win32.RegistryHive]::CurrentUser,
+            $view)
+        try {
+            foreach ($path in $paths) {
+                $root.DeleteSubKeyTree($path, $false)
+            }
+        }
+        finally {
+            $root.Dispose()
+        }
+    }
+}
+
+function Assert-PerUserComActivationKeysPresent {
+    param([Parameter(Mandatory = $true)][Microsoft.Win32.RegistryView[]]$Views)
+
+    $paths = @(
+        "Software\Classes\CLSID\{F953480C-A73C-4121-9E21-18676EC34CE8}",
+        "Software\Classes\CLSID\{A3F4E10D-0DD1-420E-8B6F-E0A654BBEA16}",
+        "Software\Classes\ExcelReportBuilder.AddIn",
+        "Software\Classes\ExcelReportBuilder.TaskPaneHost"
+    )
+
+    foreach ($view in $Views) {
+        $root = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+            [Microsoft.Win32.RegistryHive]::CurrentUser,
+            $view)
+        try {
+            foreach ($path in $paths) {
+                $key = $root.OpenSubKey($path)
+                try {
+                    if ($null -eq $key) {
+                        throw "Installer repair did not restore $path in $view."
+                    }
+                }
+                finally {
+                    if ($null -ne $key) { $key.Dispose() }
+                }
+            }
+        }
+        finally {
+            $root.Dispose()
+        }
+    }
+}
+
 $frameworkRelease = Get-DotNetFrameworkRelease
 if ($frameworkRelease -lt 528040) {
     throw ".NET Framework 4.8 or newer is required for the installation smoke test."
@@ -519,6 +577,7 @@ foreach ($view in $views) {
 
 $activationSmoke = Join-Path $temporaryRoot (
     "excel-report-builder-com-activation-" + [Guid]::NewGuid().ToString("N") + ".ps1")
+Remove-PerUserComActivationKeys -Views $views
 try {
     # GitHub-hosted Windows runners are elevated non-interactive services. In
     # that context Windows ignores per-user COM classes. The registry checks
@@ -533,6 +592,12 @@ finally {
         Remove-Item -LiteralPath $activationSmoke -Force
     }
 }
+
+$repairProcess = Start-Process $resolvedInstaller -ArgumentList $installerArguments -Wait -PassThru
+if ($repairProcess.ExitCode -ne 0) {
+    throw "Installer repair exited with code $($repairProcess.ExitCode)."
+}
+Assert-PerUserComActivationKeysPresent -Views $views
 
 Invoke-WorkerHandshakeSmoke -WorkerPath $workerPath
 
