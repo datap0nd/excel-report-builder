@@ -11,6 +11,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot "ReleaseSbom.Common.ps1")
 
 $resolvedSbom = (Resolve-Path $SbomPath).Path
 $resolvedPayload = (Resolve-Path $PayloadPath).Path
@@ -26,50 +27,16 @@ if ($fileEntries.Count -eq 0) {
     throw "The release SBOM must contain a file inventory."
 }
 
-function Get-NormalizedSbomFileName {
-    param([Parameter(Mandatory = $true)]$FileEntry)
-
-    return ([string]$FileEntry.fileName).Replace('\', '/').TrimStart(
-        [char[]]@('.', '/'))
-}
-
-function Get-SbomFileEntry {
-    param([Parameter(Mandatory = $true)][string]$RelativePath)
-
-    $normalizedPath = $RelativePath.Replace('\', '/').TrimStart([char[]]@('.', '/'))
-    $candidateEntries = @($fileEntries | Where-Object {
-        $candidate = Get-NormalizedSbomFileName -FileEntry $_
-        [string]::Equals(
-            $candidate,
-            $normalizedPath,
-            [StringComparison]::OrdinalIgnoreCase) -or
-        $candidate.EndsWith(
-            "/" + $normalizedPath,
-            [StringComparison]::OrdinalIgnoreCase)
-    })
-    if ($candidateEntries.Count -ne 1) {
-        throw "The release SBOM must contain exactly one file entry for $normalizedPath."
-    }
-
-    return $candidateEntries[0]
-}
-
-$payloadPrefix = $resolvedPayload.TrimEnd([char[]]@('\', '/')) + [IO.Path]::DirectorySeparatorChar
-$payloadFiles = @(Get-ChildItem -LiteralPath $resolvedPayload -Recurse -File)
-if ($payloadFiles.Count -eq 0) {
-    throw "The staged release payload is empty."
-}
+$payloadInventory = Get-ReleasePayloadInventory -ResolvedPayloadPath $resolvedPayload
+$sbomInventory = Get-ReleaseSbomFileInventory -FileEntries $fileEntries
+Assert-ExactReleaseFileInventory `
+    -PayloadInventory $payloadInventory `
+    -SbomInventory $sbomInventory
 
 $addedHashCount = 0
-foreach ($payloadFile in $payloadFiles) {
-    if (-not $payloadFile.FullName.StartsWith(
-            $payloadPrefix,
-            [StringComparison]::OrdinalIgnoreCase)) {
-        throw "A staged payload file resolved outside the payload root."
-    }
-
-    $relativePath = $payloadFile.FullName.Substring($payloadPrefix.Length).Replace('\', '/')
-    $entry = Get-SbomFileEntry -RelativePath $relativePath
+foreach ($relativePath in @($payloadInventory.ByPath.Keys | Sort-Object)) {
+    $payloadFile = $payloadInventory.ByPath[$relativePath]
+    $entry = $sbomInventory.ByPath[$relativePath]
     $checksumProperty = $entry.PSObject.Properties['checksums']
     $checksums = if ($null -eq $checksumProperty) { @() } else { @($entry.checksums) }
     $sha256Values = @($checksums |
@@ -109,5 +76,5 @@ $json = $document | ConvertTo-Json -Depth 100
 Set-Content -LiteralPath $resolvedSbom -Value $json -Encoding utf8NoBOM
 Write-Host (
     "Completed SHA-256 coverage for {0} payload files; added {1} missing hashes." -f
-    $payloadFiles.Count,
+    $payloadInventory.Count,
     $addedHashCount)

@@ -41,12 +41,12 @@ AppComments=Unsigned prototype. Verify the published SHA-256 checksum before ins
 SetupLogging=yes
 
 [Files]
-Source: "..\src\ExcelReportBuilder.AddIn\bin\Release\net48\*.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\src\ExcelReportBuilder.AddIn\bin\Release\net48\*.config"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
-Source: "..\artifacts\worker-x64\*"; DestDir: "{app}\worker"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: IsWin64
-Source: "..\artifacts\worker-x86\*"; DestDir: "{app}\worker"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: not IsWin64
-Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\artifacts\sbom-payload\addin\*.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\artifacts\sbom-payload\addin\*.config"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\artifacts\sbom-payload\worker-x64\*"; DestDir: "{app}\worker"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: IsWin64
+Source: "..\artifacts\sbom-payload\worker-x86\*"; DestDir: "{app}\worker"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: not IsWin64
+Source: "..\artifacts\sbom-payload\README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\artifacts\sbom-payload\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Registry]
 ; Excel add-in and managed COM classes for 32-bit Office.

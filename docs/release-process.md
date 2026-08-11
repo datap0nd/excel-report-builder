@@ -34,17 +34,22 @@ tag. Release credentials are not available to pull-request build steps.
 - The tag-only release job receives `contents`, `id-token`, and `attestations`
   write permissions. Build and pull-request jobs have read-only repository
   access.
-- The SPDX SBOM is generated from a staged copy of the exact add-in DLLs and
-  both published worker payloads before installer packaging. CI verifies every
-  staged file and SHA-256 entry, plus package evidence for the add-in, Core,
-  Excel, Agent, and both worker components, before the SBOM can become a release
-  asset.
+- The SPDX SBOM identifies the product and release version and is generated
+  from one staged payload containing the exact add-in DLLs and both worker
+  architectures. CI requires a one-to-one file inventory, verifies every
+  SHA-256 entry, rejects unsafe or duplicate paths and SPDX identifiers, and
+  checks package-to-file evidence for the add-in, Core, Excel, Agent, and both
+  worker runtime packs.
+- Inno Setup consumes that same staged payload. CI revalidates every staged byte
+  immediately before packaging, so the installer cannot silently diverge from
+  the SBOM source tree.
 
 ## Unsigned prototype warning
 
 Until an Authenticode certificate is configured, every setup filename and
 GitHub prerelease title contains `unsigned`. Windows will show an
-unknown-publisher warning. Each prerelease includes a SHA-256 checksum, SPDX
-SBOM, and GitHub build-provenance attestation.
+unknown-publisher warning. Each prerelease includes an installer checksum, SPDX
+SBOM, and a SHA-256 release manifest. GitHub build provenance attests the
+installer and SBOM subjects together from that manifest.
 
 Do not rename an unsigned setup file in a way that removes the warning label.
