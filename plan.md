@@ -26,7 +26,7 @@
    preserve the hardened COM/installer/worker infrastructure, define the
    supported real-PivotTable feature matrix, and mark the old managed-output
    workflow for retirement.
-9. [ ] Implement active PivotTable/source discovery, ordinary-to-Data-Model
+9. [x] Implement active PivotTable/source discovery, ordinary-to-Data-Model
    enablement, native field placement, and workbook-owned PivotTable+ metadata.
 10. [ ] Implement workbook DAX measure authoring and ordered MDX named sets for
     ratios, comparisons, period selections, asymmetric branches, and custom

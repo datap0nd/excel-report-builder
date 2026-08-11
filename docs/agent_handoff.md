@@ -2,99 +2,136 @@
 
 ## Current Objective
 
-The public `v0.1.0` unsigned prototype is released and independently verified.
-An authorized synthetic-data field test on Microsoft 365 desktop Excel exposed
-and repaired invalid hand-written Office COM callback metadata. The repaired
-add-in now starts and connects without crashing. The next activity is to
-exercise the visible task pane through a complete synthetic managed-draft flow.
+Tasks 1-9 are complete on `codex/pivottable-plus`. Task 9 establishes the safe,
+native PivotTable+ foundation: read-only discovery, validated layout mutation,
+explicit classic-to-Data-Model conversion, durable recovery, and exact ownership
+of generated workbook artifacts.
 
-## Repo State
+The next numbered task is Task 10: implement typed, deterministic DAX measures
+and ordered MDX named sets for ratios, comparisons, period selections,
+asymmetric branches, and custom row or column order inside one real PivotTable.
 
-- Branch: `main`
-- Public repo: `datap0nd/excel-report-builder`
-- Release source commit: `6e512ea3174eab5bb2d9b471ca4ee24aa14af3e5`
-- Tag: `v0.1.0`
-- Prerelease: <https://github.com/datap0nd/excel-report-builder/releases/tag/v0.1.0>
-- Tasks 1-7 in `plan.md` are complete. Interactive managed-draft validation
-  remains separate.
-- Main-branch protection is enabled after the final evidence commit passes its
-  required Windows and security checks.
-- The published `v0.1.0` installer predates the COM ABI repair. A patch release
-  has not yet been cut.
+## Repository State
 
-## Delivered Product Boundary
+- Branch: `codex/pivottable-plus`
+- Tasks 1-9 in `plan.md` are complete; Tasks 10-14 remain.
+- Task 9 was implemented and verified without controlling the Excel UI or using
+  computer automation. All repository evidence uses generated synthetic data
+  and generic names.
+- The PivotTable+ rebuild remains intentionally incomplete until Tasks 10-14
+  are implemented and verified.
 
-- The product is a clean public implementation using generated synthetic
-  fixtures and generic language only.
-- The native .NET Framework 4.8 COM add-in provides Data, Build, Chat, and Checks
-  surfaces in a WPF task pane with continuous typed progress and a 15-second
-  no-silence heartbeat.
-- Manual configuration and the guarded model worker produce the same versioned
-  report specification. The worker has no arbitrary code, formula, COM,
-  filesystem, save, publish, delete, email, or unrestricted network tool.
-- Long and wide period layouts, deterministic transformations, worksheet and
-  Data Model routing, native PivotTables, hidden-pivot dense blocks, typed
-  measures, validation, repair, publish approval, and rollback are implemented.
-- The source sheet remains unchanged. Autonomous work is limited to owned
-  managed drafts, and the add-in never saves the workbook automatically.
-- Endpoint credentials are protected for the current Windows user. Every worker
-  launch uses a random current-user pipe and one-time HMAC proof before any
-  credential, prompt, or workbook sample is sent.
+## Task 9 Product Contract
+
+### Core contracts and validation
+
+- Immutable PivotTable+ contracts describe a path-free workbook, worksheet,
+  PivotTable, source, field catalog, placements, filters, layout, and format.
+- Layout mutation is explicit: a definition must contain placements unless
+  `ClearAll` is set, and `ClearAll` cannot be combined with placements.
+- Rows, Columns, Filters, and Values have deterministic positions. The special
+  Excel Values axis is typed as Automatic, Rows, or Columns with a one-based
+  position; two or more Values require an explicit axis.
+- Validation derives required capabilities from the requested operation and
+  enforces the classic worksheet, Data Model, and external OLAP source truth
+  table. Capability flags describe Excel and source potential, while each
+  executor still fails closed for operations it does not implement.
+- A regular source field cannot occupy more than one non-Values area. Classic
+  Values may repeat a source field when captions remain unique. Data Model
+  implicit Values support Sum, Count, Average, Minimum, and Maximum with unique
+  field-and-function pairs. External OLAP Values must reference existing
+  measures.
+- Workbook-local identifiers and field bindings reject path-like values,
+  unknown fields, invalid enum states, ambiguous captions, and source or target
+  contradictions before native mutation.
+
+### Read-only discovery and workbook identity
+
+- Discovery inspects the active, selected native PivotTable and identifies a
+  classic worksheet source, the workbook Data Model, or external OLAP without
+  changing the workbook.
+- It captures fields, placements, layout, formatting, source capabilities, and
+  the Excel Values pseudo-field while excluding that pseudo-field from the
+  regular field catalog through COM identity comparison.
+- Workbook identity resolution is read-only. It returns an existing stored ID
+  or a session-stable `workbook_<guid>` token, so opening the pane or selecting
+  a PivotTable does not add Custom XML or dirty the workbook.
+- Apply persists that exact token once, after live target and source preflight
+  plus rollback-state capture succeed and immediately before the first native
+  mutation. Exact-token persistence is idempotent and rejects collisions.
+
+### Native PivotTable mutation
+
+- The native service binds the supplied COM object to the requested workbook,
+  worksheet, PivotTable, cache, and source before it captures or changes state.
+- Classic and OLAP/Data Model fields can be placed in Rows, Columns, Filters,
+  and Values with supported aggregation, position, row-axis layout, totals,
+  subtotals, repeated labels, style, and number-format metadata.
+- The Values pseudo-field axis and position are captured, applied, restored,
+  and verified explicitly instead of being treated as an ordinary source
+  field.
+- Preflight fails closed for unreadable mutation-relevant COM state, active
+  native filters that cannot be preserved, unsupported Show Values As state,
+  calculated fields or items, mixed per-row repeated labels, source drift, and
+  unsupported source or aggregation combinations.
+- Apply uses bounded native batching, refresh, exact postcondition checks, and
+  rollback. Rollback restores layout, formatting, filters and captions that are
+  represented by the contract, including pre-existing implicit measure
+  captions. Newly created implicit measures are tracked for cleanup on failure.
+- Task 9 never substitutes a formula-backed companion report and never claims
+  ownership of the user's PivotTable or source data.
+
+### Explicit classic-to-Data-Model conversion
+
+- Conversion is a separate, explicit operation for an ordinary classic
+  PivotTable. It can bind a worksheet table or a workbook-scoped source name
+  for a raw range without converting or reformatting the user's source.
+- Generated source name, query, connection, and temporary PivotTable artifacts
+  are planned and fingerprinted before creation. The original classic
+  PivotTable remains available until the replacement is independently bound,
+  refreshed, formatted, and verified.
+- Ownership schema 1.3 provides write-ahead Pending state, exact temporary
+  worksheet and PivotTable receipts, recovery checkpoints, and an Active
+  promotion boundary. `RecoverPending` durably completes or safely converges an
+  interrupted conversion without growing artifacts or deleting unowned state.
+- Retry and cleanup require exact IDs, fingerprints, source lineage, and target
+  receipts. Ambiguous, changed, or contaminated workbook state fails closed.
+
+### Workbook-owned metadata
+
+- Versioned, deterministic Custom XML stores only path-free identifiers,
+  fingerprints, the target worksheet and PivotTable, bounded undo or recovery
+  metadata, and lifecycle state.
+- Ownership covers only generated measures, named sets, queries, connections,
+  workbook-scoped source names, and temporary conversion artifacts. Exact
+  collision guards prevent one setup from claiming another setup's artifacts.
+- Workbook paths, source data, prompts, credentials, endpoint details, and
+  measure formulas are not stored in PivotTable+ ownership metadata.
 
 ## Verification Evidence
 
-- Local Release build: zero warnings and zero errors.
-- Full synthetic suite: 484 passed, 0 failed, 0 skipped.
-- Final pre-tag Windows run: <https://github.com/datap0nd/excel-report-builder/actions/runs/31515081616>
-- Final security run: <https://github.com/datap0nd/excel-report-builder/actions/runs/31515081587>
-- Tagged build and release run: <https://github.com/datap0nd/excel-report-builder/actions/runs/31515470291>
-- Windows verified public safety, build, all tests, vulnerable dependencies,
-  complete-payload SBOM, COM contracts, WPF rendering, installer construction,
-  per-user x86/x64 registry values and value kinds, repair, real COM activation,
-  authenticated and fail-closed worker launches, uninstall, and cleanup.
-- The final 420 by 900 task-pane render was inspected. Source field names are
-  readable, and the operation identity uses constrained trimming at the minimum
-  pane width.
-- The public release manifest independently matched the downloaded installer
-  and SPDX SBOM.
-- Installer SHA-256:
-  `eee4c80f3b5acf03e1ad61c8bfffd0cc83685ce4aa47079526e13a317afd545b`
-- SBOM SHA-256:
-  `aba6a35a66147143883bbb0c647cd785582add7fddc3c8d69ed2ad774a09082a`
-- The installer and SBOM each passed SLSA provenance verification against the
-  tagged source commit and `.github/workflows/windows-build.yml`.
-- The repaired Release build completes with zero warnings and zero errors; all
-  484 synthetic tests, the COM ABI contract, task-pane contract, and public
-  safety checks pass locally.
-- A minimal A/B COM probe reproduced the CLR access violation with the old
-  `IDTExtensibility2` declaration and completed `OnConnection`,
-  `OnAddInsUpdate`, and `OnStartupComplete` after matching Office's
-  `SAFEARRAY(VARIANT)` contract.
-- Microsoft 365 desktop Excel `16.0.20228.20158` x64 opened the generated
-  `sales_long.csv` source with `ExcelReportBuilder.AddIn` connected,
-  `LoadBehavior=3`, and no new Excel or .NET Runtime crash event.
+- Release builds complete with zero warnings and zero errors for both Excel
+  target frameworks: .NET Framework 4.8 and .NET Standard 2.0.
+- The final automated suite has 786 passing tests: 170 Core, 98 Agent, and 518
+  Excel tests.
+- Coverage includes validation, read-only discovery, session identity,
+  classic and OLAP layout planning, fail-closed COM capture, exact verification
+  and rollback, schema 1.3 ownership, raw-range binding, interrupted conversion
+  recovery, collision handling, and idempotent retry.
+- The repository public-safety check passes against tracked and nonignored
+  files. Task 9 fixtures and documentation contain only generated synthetic or
+  generic content.
 
-## Remaining Boundary
+## Remaining Boundary and Next Step
 
-- The installer is intentionally unsigned, so Windows displays an
-  unknown-publisher warning.
-- A real Excel LTSC 2021 workbook session has not been exercised.
-- Microsoft 365 startup and connection are field-validated with generated
-  synthetic data; the full visible task-pane build, check, and publish flow is
-  not yet recorded as field evidence.
-- The running Excel session has the ABI-repaired field binary loaded. Additional
-  RCW lifecycle hardening in the current source is built and tested, but the
-  locked installed DLL cannot be replaced until Excel closes normally. No
-  Windows restart or Office reinstall is required.
-- A real workbook requires separate explicit authorization and must remain
-  confined to managed drafts.
-- Do not reinstall the original `v0.1.0` asset over the repaired local field
-  installation.
-
-## Next Step
-
-Ask the user to verify **Data > Report Builder** with a generated source, build
-a managed draft, run checks, and publish only after explicit review. Do not
-control Excel's UI or inspect a real workbook without separate authorization.
-After that evidence is recorded, publish a patch release containing the
-repaired COM contracts.
+- Automated tests use synthetic late-bound hosts and do not replace live Excel
+  evidence. No Excel UI or computer control was used for Task 9.
+- Live smoke coverage for Excel LTSC 2021 and Microsoft 365 remains part of
+  Task 14. The main host risks are COM/RCW identity behavior, Values
+  pseudo-field placement, PivotCache replacement, provider and Data Model
+  differences, refresh timing, and rollback after real-host COM failures.
+- Task 10 is next. It must expose only typed, validated measure and named-set
+  operations; it must not expose arbitrary DAX, MDX, formulas, COM, filesystem,
+  save, publish, or deletion capabilities to the model.
+- Task 11 will add the PivotTable+ UI after the native and calculation layers
+  exist. Live-host and installer release evidence remains deferred to Task 14.

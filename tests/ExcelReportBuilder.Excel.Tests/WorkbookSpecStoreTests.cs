@@ -28,6 +28,35 @@ public sealed class WorkbookSpecStoreTests
     }
 
     [Fact]
+    public void Workbook_identity_ensure_persists_the_exact_token_once_and_rejects_collisions()
+    {
+        var workbook = new FakeWorkbook();
+        var store = new WorkbookIdentityStore();
+        const string expected = "workbook_11111111111111111111111111111111";
+        const string collision = "workbook_22222222222222222222222222222222";
+
+        Assert.Equal(expected, store.Ensure(workbook, expected));
+        Assert.Equal(expected, store.Ensure(workbook, expected));
+        Assert.Equal(1, workbook.CustomXMLParts.TotalCount);
+
+        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
+            store.Ensure(workbook, collision));
+        Assert.Contains("different managed workbook identity", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(1, workbook.CustomXMLParts.TotalCount);
+    }
+
+    [Fact]
+    public void Workbook_identity_ensure_rejects_non_managed_tokens_without_writing()
+    {
+        var workbook = new FakeWorkbook();
+
+        Assert.Throws<ArgumentException>(() =>
+            new WorkbookIdentityStore().Ensure(workbook, @"C:\secret\book.xlsx"));
+
+        Assert.Equal(0, workbook.CustomXMLParts.TotalCount);
+    }
+
+    [Fact]
     public void Workbook_identity_rejects_unknown_owned_versions()
     {
         var workbook = new FakeWorkbook();
@@ -39,6 +68,36 @@ public sealed class WorkbookSpecStoreTests
             () => new WorkbookIdentityStore().GetOrCreate(workbook));
 
         Assert.Equal("Unknown workbook identity version.", exception.Message);
+    }
+
+    [Fact]
+    public void Workbook_identity_fails_closed_when_owned_parts_cannot_be_enumerated()
+    {
+        var workbook = new FakeWorkbook();
+        workbook.CustomXMLParts.ThrowOnSelect = true;
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => new WorkbookIdentityStore().GetOrCreate(workbook));
+
+        Assert.Equal(
+            "The managed workbook identity parts could not be enumerated.",
+            exception.Message);
+        Assert.Empty(workbook.CustomXMLParts.AllXml);
+    }
+
+    [Fact]
+    public void Workbook_identity_rejects_a_null_no_op_add_result()
+    {
+        var workbook = new FakeWorkbook();
+        workbook.CustomXMLParts.ReturnNullWithoutAdding = true;
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => new WorkbookIdentityStore().GetOrCreate(workbook));
+
+        Assert.Equal(
+            "Excel did not return the persisted managed workbook identity.",
+            exception.Message);
+        Assert.Empty(workbook.CustomXMLParts.AllXml);
     }
 
     [Fact]
@@ -129,12 +188,21 @@ public sealed class WorkbookSpecStoreTests
     {
         private readonly List<FakeCustomXmlPart> parts = new();
 
+        public bool ThrowOnSelect { get; set; }
+
+        public bool ReturnNullWithoutAdding { get; set; }
+
         public int TotalCount => parts.Count;
 
         public IReadOnlyList<string> AllXml => parts.Select(part => part.XML).ToList();
 
-        public FakeCustomXmlPart Add(string xml)
+        public FakeCustomXmlPart? Add(string xml)
         {
+            if (ReturnNullWithoutAdding)
+            {
+                return null;
+            }
+
             FakeCustomXmlPart? holder = null;
             var created = new FakeCustomXmlPart(xml, () => parts.RemoveAll(item => ReferenceEquals(item, holder)));
             holder = created;
@@ -144,6 +212,11 @@ public sealed class WorkbookSpecStoreTests
 
         public FakeCustomXmlPartSelection SelectByNamespace(string namespaceUri)
         {
+            if (ThrowOnSelect)
+            {
+                throw new InvalidOperationException("Injected selection failure.");
+            }
+
             var matches = parts.Where(part =>
             {
                 var document = XDocument.Parse(part.XML);
