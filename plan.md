@@ -19,6 +19,9 @@
 6. [x] Complete public release verification. User-authorized Excel field
    validation remains a separate next activity and was not part of this
    release.
+7. [x] Repair the Office COM callback ABI, add marshaling regression checks,
+   and validate add-in startup against generated synthetic data in Microsoft
+   365 desktop Excel.
 
 ## Completion Contract
 
@@ -27,3 +30,5 @@ Windows build and installer checks pass, a tagged release is available, and the
 synthetic end-to-end scenario produces a checked managed draft through both the
 manual builder and chatbot specification path. Field validation on a managed
 work PC remains separately authorized and is not implied by repository work.
+Post-release compatibility repairs must preserve the same safety boundary and
+pass both synthetic verification and an explicitly authorized Excel field test.

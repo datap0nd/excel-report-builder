@@ -33,6 +33,11 @@ Verify the checksum, close Excel, and run setup. Installation is per user and
 does not request administrator rights. The prototype is unsigned, so Windows
 will show an unknown-publisher warning.
 
+> **Release note:** the published `v0.1.0` installer predates the Office COM
+> callback ABI repair in the current source. Use a later patch release when
+> available; do not reinstall the original asset over a repaired development
+> installation.
+
 Open Excel and choose **Excel Report Builder** on the ribbon. The default path
 is manual and does not need a model. Chat requires an OpenAI-compatible
 endpoint and an editable model ID. No model is bundled.

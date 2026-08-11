@@ -3,6 +3,10 @@
 This is an unsigned `v0.1.0` prototype. Use a copy of an important workbook
 until the add-in has been validated in your own Excel environment.
 
+The published `v0.1.0` installer predates the repaired Office COM callback
+contracts in the current source. Use a later patch release when one is
+available.
+
 - Windows and classic desktop Excel are required. The add-in does not run in
   Excel for the web or on macOS.
 - The supported source is one selected in-workbook table or rectangular range
@@ -43,5 +47,7 @@ until the add-in has been validated in your own Excel environment.
 - Setup is not Authenticode-signed. Verify the published SHA-256 checksum before
   running it.
 - CI verifies builds, contracts, COM registration, worker startup, installation,
-  and uninstall cleanup on Windows. A real Excel field test is intentionally
-  deferred until a user explicitly authorizes a managed workstation session.
+  and uninstall cleanup on Windows. Microsoft 365 desktop Excel startup has
+  been field-tested with generated synthetic data; LTSC 2021 and a complete
+  interactive managed-draft flow still require explicitly authorized field
+  validation.

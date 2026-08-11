@@ -3,9 +3,10 @@
 ## Current Objective
 
 The public `v0.1.0` unsigned prototype is released and independently verified.
-The next activity is a separately authorized field test in managed Excel,
-starting with generated synthetic data and managed draft sheets. No managed
-workstation or remote-desktop session was used for this release.
+An authorized synthetic-data field test on Microsoft 365 desktop Excel exposed
+and repaired invalid hand-written Office COM callback metadata. The repaired
+add-in now starts and connects without crashing. The next activity is to
+exercise the visible task pane through a complete synthetic managed-draft flow.
 
 ## Repo State
 
@@ -14,9 +15,12 @@ workstation or remote-desktop session was used for this release.
 - Release source commit: `6e512ea3174eab5bb2d9b471ca4ee24aa14af3e5`
 - Tag: `v0.1.0`
 - Prerelease: <https://github.com/datap0nd/excel-report-builder/releases/tag/v0.1.0>
-- Tasks 1-6 in `plan.md` are complete. Field validation remains separate.
+- Tasks 1-7 in `plan.md` are complete. Interactive managed-draft validation
+  remains separate.
 - Main-branch protection is enabled after the final evidence commit passes its
   required Windows and security checks.
+- The published `v0.1.0` installer predates the COM ABI repair. A patch release
+  has not yet been cut.
 
 ## Delivered Product Boundary
 
@@ -59,18 +63,38 @@ workstation or remote-desktop session was used for this release.
   `aba6a35a66147143883bbb0c647cd785582add7fddc3c8d69ed2ad774a09082a`
 - The installer and SBOM each passed SLSA provenance verification against the
   tagged source commit and `.github/workflows/windows-build.yml`.
+- The repaired Release build completes with zero warnings and zero errors; all
+  484 synthetic tests, the COM ABI contract, task-pane contract, and public
+  safety checks pass locally.
+- A minimal A/B COM probe reproduced the CLR access violation with the old
+  `IDTExtensibility2` declaration and completed `OnConnection`,
+  `OnAddInsUpdate`, and `OnStartupComplete` after matching Office's
+  `SAFEARRAY(VARIANT)` contract.
+- Microsoft 365 desktop Excel `16.0.20228.20158` x64 opened the generated
+  `sales_long.csv` source with `ExcelReportBuilder.AddIn` connected,
+  `LoadBehavior=3`, and no new Excel or .NET Runtime crash event.
 
 ## Remaining Boundary
 
 - The installer is intentionally unsigned, so Windows displays an
   unknown-publisher warning.
-- A real Excel LTSC 2021 workbook session has not been exercised. That test must
-  begin with a small generated synthetic workbook. A real workbook requires a
-  separate explicit authorization and must remain confined to managed drafts.
-- No code or release blocker is known.
+- A real Excel LTSC 2021 workbook session has not been exercised.
+- Microsoft 365 startup and connection are field-validated with generated
+  synthetic data; the full visible task-pane build, check, and publish flow is
+  not yet recorded as field evidence.
+- The running Excel session has the ABI-repaired field binary loaded. Additional
+  RCW lifecycle hardening in the current source is built and tested, but the
+  locked installed DLL cannot be replaced until Excel closes normally. No
+  Windows restart or Office reinstall is required.
+- A real workbook requires separate explicit authorization and must remain
+  confined to managed drafts.
+- Do not reinstall the original `v0.1.0` asset over the repaired local field
+  installation.
 
 ## Next Step
 
-Wait for explicit authorization to run the managed Excel field test. Do not use
-a remote-desktop session or inspect a real workbook merely because the public
-release is complete.
+Ask the user to verify **Data > Report Builder** with a generated source, build
+a managed draft, run checks, and publish only after explicit review. Do not
+control Excel's UI or inspect a real workbook without separate authorization.
+After that evidence is recorded, publish a patch release containing the
+repaired COM contracts.

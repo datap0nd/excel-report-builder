@@ -28,7 +28,7 @@ namespace ExcelReportBuilder.AddIn.Com
 
         private object? _application;
         private object? _addInInstance;
-        private object? _taskPaneFactory;
+        private ICTPFactory? _taskPaneFactory;
         private object? _taskPane;
         private object? _ribbonUi;
         private bool _showWhenFactoryIsReady;
@@ -54,10 +54,6 @@ namespace ExcelReportBuilder.AddIn.Com
         {
             TaskPaneBootstrapper.HostServiceFactory = null;
             TearDownTaskPane();
-            LateBoundCom.FinalRelease(_ribbonUi);
-            LateBoundCom.FinalRelease(_taskPaneFactory);
-            LateBoundCom.FinalRelease(_addInInstance);
-            LateBoundCom.FinalRelease(_application);
 
             _ribbonUi = null;
             _taskPaneFactory = null;
@@ -80,9 +76,8 @@ namespace ExcelReportBuilder.AddIn.Com
             TearDownTaskPane();
         }
 
-        public void CTPFactoryAvailable(object taskPaneFactory)
+        public void CTPFactoryAvailable(ICTPFactory taskPaneFactory)
         {
-            LateBoundCom.FinalRelease(_taskPaneFactory);
             _taskPaneFactory = taskPaneFactory;
 
             if (_showWhenFactoryIsReady)
@@ -168,9 +163,7 @@ namespace ExcelReportBuilder.AddIn.Com
 
             try
             {
-                _taskPane = LateBoundCom.Invoke(
-                    _taskPaneFactory,
-                    "CreateCTP",
+                _taskPane = _taskPaneFactory.CreateCTP(
                     TaskPaneHost.ProgramId,
                     TaskPaneTitle,
                     parentWindow);
@@ -184,13 +177,6 @@ namespace ExcelReportBuilder.AddIn.Com
             {
                 _taskPane = null;
                 _showWhenFactoryIsReady = false;
-            }
-            finally
-            {
-                if (!ReferenceEquals(parentWindow, Type.Missing))
-                {
-                    LateBoundCom.FinalRelease(parentWindow);
-                }
             }
         }
 
