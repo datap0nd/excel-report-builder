@@ -60,7 +60,10 @@ function Get-PeMachine {
 }
 
 function Invoke-ComActivationSmoke {
-    param([Parameter(Mandatory = $true)][string]$ScriptPath)
+    param(
+        [Parameter(Mandatory = $true)][string]$ScriptPath,
+        [Parameter(Mandatory = $true)][string]$AssemblyPath
+    )
 
     @'
 $ErrorActionPreference = "Stop"
@@ -88,15 +91,44 @@ foreach ($progId in @(
 }
 '@ | Set-Content $ScriptPath -Encoding ascii
 
-    $powershellHosts = @("$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe")
-    if ([Environment]::Is64BitOperatingSystem) {
-        $powershellHosts += "$env:WINDIR\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
+    $activationHosts = if ([Environment]::Is64BitOperatingSystem) {
+        @(
+            [pscustomobject]@{
+                PowerShell = "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
+                RegAsm = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\RegAsm.exe"
+            },
+            [pscustomobject]@{
+                PowerShell = "$env:WINDIR\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
+                RegAsm = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\RegAsm.exe"
+            }
+        )
+    }
+    else {
+        @(
+            [pscustomobject]@{
+                PowerShell = "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
+                RegAsm = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\RegAsm.exe"
+            }
+        )
     }
 
-    foreach ($powershellHost in $powershellHosts) {
-        & $powershellHost -NoProfile -STA -File $ScriptPath
-        if ($LASTEXITCODE -ne 0) {
-            throw "Installed COM activation failed in $powershellHost."
+    foreach ($activationHost in $activationHosts) {
+        try {
+            & $activationHost.RegAsm $AssemblyPath /codebase /nologo
+            if ($LASTEXITCODE -ne 0) {
+                throw "Temporary COM registration failed in $($activationHost.RegAsm)."
+            }
+
+            & $activationHost.PowerShell -NoProfile -STA -File $ScriptPath
+            if ($LASTEXITCODE -ne 0) {
+                throw "Installed COM activation failed in $($activationHost.PowerShell)."
+            }
+        }
+        finally {
+            & $activationHost.RegAsm $AssemblyPath /unregister /nologo
+            if ($LASTEXITCODE -ne 0) {
+                throw "Temporary COM registration cleanup failed in $($activationHost.RegAsm)."
+            }
         }
     }
 }
@@ -488,7 +520,13 @@ foreach ($view in $views) {
 $activationSmoke = Join-Path $temporaryRoot (
     "excel-report-builder-com-activation-" + [Guid]::NewGuid().ToString("N") + ".ps1")
 try {
-    Invoke-ComActivationSmoke -ScriptPath $activationSmoke
+    # GitHub-hosted Windows runners are elevated non-interactive services. In
+    # that context Windows ignores per-user COM classes. The registry checks
+    # above verify the installed HKCU contract; temporary machine registration
+    # exercises both real managed class factories and is removed immediately.
+    Invoke-ComActivationSmoke `
+        -ScriptPath $activationSmoke `
+        -AssemblyPath $assemblyPath
 }
 finally {
     if (Test-Path -LiteralPath $activationSmoke) {
