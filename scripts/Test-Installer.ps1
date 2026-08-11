@@ -104,12 +104,17 @@ foreach ($progId in @(
 function Read-ExactBytes {
     param(
         [Parameter(Mandatory = $true)][IO.Stream]$Stream,
-        [Parameter(Mandatory = $true)][byte[]]$Buffer
+        [Parameter(Mandatory = $true)][byte[]]$Buffer,
+        [ValidateRange(1, 60000)][int]$TimeoutMilliseconds = 10000
     )
 
     $offset = 0
     while ($offset -lt $Buffer.Length) {
-        $read = $Stream.Read($Buffer, $offset, $Buffer.Length - $offset)
+        $readTask = $Stream.ReadAsync($Buffer, $offset, $Buffer.Length - $offset)
+        if (-not $readTask.Wait($TimeoutMilliseconds)) {
+            throw "Timed out while reading the worker protocol response."
+        }
+        $read = $readTask.GetAwaiter().GetResult()
         if ($read -eq 0) {
             throw "The worker closed the pipe before completing its response."
         }
@@ -155,10 +160,8 @@ function Invoke-WorkerHandshakeSmoke {
             ".",
             $pipeName,
             [IO.Pipes.PipeDirection]::InOut,
-            [IO.Pipes.PipeOptions]::None)
+            [IO.Pipes.PipeOptions]::Asynchronous)
         $pipe.Connect(10000)
-        $pipe.ReadTimeout = 10000
-        $pipe.WriteTimeout = 10000
 
         $correlationId = "installer-smoke"
         $nonceBytes = [byte[]]::new(32)
