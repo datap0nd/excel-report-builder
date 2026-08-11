@@ -80,12 +80,19 @@ foreach ($payloadFile in $payloadFiles) {
         ForEach-Object { [string]$_.checksumValue })
     $actualHash = Get-FileHash -LiteralPath $payloadFile.FullName -Algorithm SHA256
     $actualSha256 = $actualHash.Hash.ToLowerInvariant()
-    if ($sha256Values.Count -ne 1 -or
-        -not [string]::Equals(
+    if ($sha256Values.Count -ne 1) {
+        throw (
+            "The release SBOM must contain exactly one SHA-256 checksum for " +
+            "$relativePath; found $($sha256Values.Count).")
+    }
+
+    if (-not [string]::Equals(
             $sha256Values[0],
             $actualSha256,
             [StringComparison]::OrdinalIgnoreCase)) {
-        throw "The release SBOM SHA-256 does not match staged payload file $relativePath."
+        throw (
+            "The release SBOM SHA-256 does not match staged payload file " +
+            "$relativePath. SBOM=$($sha256Values[0]); payload=$actualSha256.")
     }
 }
 
