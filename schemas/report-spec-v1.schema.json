@@ -1,0 +1,1087 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Excel Report Builder ReportSpecV1",
+  "description": "The bounded version 1 contract shared by the manual and AI-assisted dense management report builders.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "name",
+    "ownershipId",
+    "source",
+    "transforms",
+    "measures",
+    "blocks",
+    "styles",
+    "checks"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "id": { "$ref": "#/$defs/identifier" },
+    "name": { "$ref": "#/$defs/label" },
+    "ownershipId": { "$ref": "#/$defs/identifier" },
+    "source": { "$ref": "#/$defs/workbookSource" },
+    "periodMapping": { "$ref": "#/$defs/periodMapping" },
+    "transforms": {
+      "type": "array",
+      "maxItems": 100,
+      "items": { "$ref": "#/$defs/transform" }
+    },
+    "measures": {
+      "type": "array",
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/measureDefinition" }
+    },
+    "blocks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/reportBlock" }
+    },
+    "styles": {
+      "type": "array",
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/presentationStyle" }
+    },
+    "checks": {
+      "type": "array",
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/reportCheck" }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "columnName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "not": { "pattern": "^__[Ee][Rr][Bb]_" }
+    },
+    "columnList": {
+      "type": "array",
+      "maxItems": 16384,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/columnName" }
+    },
+    "scalarValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "null" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "text"],
+          "properties": {
+            "kind": { "const": "text" },
+            "text": {
+              "type": "string",
+              "maxLength": 1024,
+              "pattern": "^[^\\u0000-\\u001F\\u007F]*$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "number"],
+          "properties": {
+            "kind": { "const": "number" },
+            "number": { "type": "number" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "boolean"],
+          "properties": {
+            "kind": { "const": "boolean" },
+            "boolean": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "temporal"],
+          "properties": {
+            "kind": { "enum": ["date", "dateTime"] },
+            "temporal": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})?$"
+            }
+          }
+        }
+      ]
+    },
+    "nonNullScalarValue": {
+      "allOf": [
+        { "$ref": "#/$defs/scalarValue" },
+        {
+          "not": {
+            "type": "object",
+            "required": ["kind"],
+            "properties": { "kind": { "const": "null" } }
+          }
+        }
+      ]
+    },
+    "sourceFingerprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "headerHash", "columnCount"],
+      "properties": {
+        "algorithm": { "const": "sha256-v1" },
+        "headerHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "columnCount": { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "sampleHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "sampleRowCount": { "type": "integer", "minimum": 1, "maximum": 64 }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["sampleHash"] },
+          "then": { "required": ["sampleRowCount"] },
+          "else": { "not": { "required": ["sampleRowCount"] } }
+        }
+      ]
+    },
+    "workbookSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "workbookObjectName", "headerRowCount", "fingerprint"],
+      "properties": {
+        "kind": { "enum": ["table", "namedRange"] },
+        "workbookObjectName": {
+          "type": "string",
+          "maxLength": 255,
+          "pattern": "^[A-Za-z_\\\\][A-Za-z0-9_.\\\\]*$"
+        },
+        "headerRowCount": { "const": 1 },
+        "fingerprint": { "$ref": "#/$defs/sourceFingerprint" }
+      }
+    },
+    "periodColumnMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceColumn", "month"],
+      "properties": {
+        "sourceColumn": { "$ref": "#/$defs/columnName" },
+        "month": { "type": "integer", "minimum": 1, "maximum": 12 },
+        "year": { "type": "integer", "minimum": 1900, "maximum": 9999 },
+        "metric": { "$ref": "#/$defs/label" }
+      }
+    },
+    "periodMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "keyColumns",
+        "columns",
+        "periodColumnName",
+        "valueColumnName",
+        "metricColumnName"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "kind": { "enum": ["longDateColumn", "monthHeaders", "metricMonthHeaders"] },
+        "grain": { "enum": ["day", "month", "quarter"] },
+        "dateColumn": { "$ref": "#/$defs/columnName" },
+        "keyColumns": { "$ref": "#/$defs/columnList" },
+        "columns": {
+          "type": "array",
+          "maxItems": 16384,
+          "items": { "$ref": "#/$defs/periodColumnMapping" }
+        },
+        "reportingYear": { "type": "integer", "minimum": 1900, "maximum": 9999 },
+        "periodColumnName": { "$ref": "#/$defs/columnName" },
+        "valueColumnName": { "$ref": "#/$defs/columnName" },
+        "metricColumnName": { "$ref": "#/$defs/columnName" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "longDateColumn" } } },
+          "then": {
+            "required": ["dateColumn"],
+            "properties": { "columns": { "maxItems": 0 } }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "enum": ["monthHeaders", "metricMonthHeaders"] } } },
+          "then": {
+            "properties": { "columns": { "minItems": 1 } },
+            "not": { "required": ["dateColumn"] }
+          }
+        }
+      ]
+    },
+    "transform": {
+      "oneOf": [
+        { "$ref": "#/$defs/selectColumnsTransform" },
+        { "$ref": "#/$defs/keepColumnsTransform" },
+        { "$ref": "#/$defs/removeColumnsTransform" },
+        { "$ref": "#/$defs/reorderColumnsTransform" },
+        { "$ref": "#/$defs/renameColumnTransform" },
+        { "$ref": "#/$defs/changeColumnTypeTransform" },
+        { "$ref": "#/$defs/trimTextTransform" },
+        { "$ref": "#/$defs/replaceValueTransform" },
+        { "$ref": "#/$defs/normalizeBlanksTransform" },
+        { "$ref": "#/$defs/normalizeErrorsTransform" },
+        { "$ref": "#/$defs/fillDownTransform" },
+        { "$ref": "#/$defs/mapValuesTransform" },
+        { "$ref": "#/$defs/filterRowsTransform" },
+        { "$ref": "#/$defs/excludeTotalRowsTransform" },
+        { "$ref": "#/$defs/derivePeriodPartsTransform" },
+        { "$ref": "#/$defs/addArithmeticColumnTransform" },
+        { "$ref": "#/$defs/normalizePeriodsTransform" }
+      ]
+    },
+    "selectColumnsTransform": {
+      "$ref": "#/$defs/columnListTransform",
+      "description": "Selects and orders the complete output column list.",
+      "properties": { "kind": { "const": "selectColumns" } }
+    },
+    "keepColumnsTransform": {
+      "$ref": "#/$defs/columnListTransform",
+      "properties": { "kind": { "const": "keepColumns" } }
+    },
+    "removeColumnsTransform": {
+      "$ref": "#/$defs/columnListTransform",
+      "properties": { "kind": { "const": "removeColumns" } }
+    },
+    "reorderColumnsTransform": {
+      "$ref": "#/$defs/columnListTransform",
+      "properties": { "kind": { "const": "reorderColumns" } }
+    },
+    "columnListTransform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "columns"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "kind": {
+          "enum": ["selectColumns", "keepColumns", "removeColumns", "reorderColumns"]
+        },
+        "columns": {
+          "allOf": [
+            { "$ref": "#/$defs/columnList" },
+            { "minItems": 1 }
+          ]
+        }
+      }
+    },
+    "renameColumnTransform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "from", "to"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "kind": { "const": "renameColumn" },
+        "from": { "$ref": "#/$defs/columnName" },
+        "to": { "$ref": "#/$defs/columnName" }
+      }
+    },
+    "changeColumnTypeTransform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "column", "dataType"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "kind": { "const": "changeColumnType" },
+        "column": { "$ref": "#/$defs/columnName" },
+        "dataType": {
+          "enum": ["text", "wholeNumber", "decimalNumber", "boolean", "date", "dateTime"]
+        }
+      }
+    },
+    "trimTextTransform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "columns"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "kind": { "const": "trimText" },
+        "columns": { "$ref": "#/$defs/nonEmptyColumnList" }
+      }
+    },
+    "replaceValueTransform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "column", "find", "replaceWith"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "kind": { "const": "replaceValue" },
+        "column": { "$ref": "#/$defs/columnName" },
+        "find": { "$ref": "#/$defs/scalarValue" },
+        "replaceWith": { "$ref": "#/$defs/scalarValue" }
+      }
+    },
+    "normalizeBlanksTransform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "columns", "replacement", "treatWhitespaceAsBlank"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "kind": { "const": "normalizeBlanks" },
+        "columns": { "$ref": "#/$defs/nonEmptyColumnList" },
+        "replacement": { "$ref": "#/$defs/scalarValue" },
+        "treatWhitespaceAsBlank": { "type": "boolean" }
+      }
+    },
+    "normalizeErrorsTransform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "columns", "replacement"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "kind": { "const": "normalizeErrors" },
+        "columns": { "$ref": "#/$defs/nonEmptyColumnList" },
+        "replacement": { "$ref": "#/$defs/scalarValue" }
+      }
+    },
+    "fillDownTransform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "columns"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "kind": { "const": "fillDown" },
+        "columns": { "$ref": "#/$defs/nonEmptyColumnList" }
+      }
+    },
+    "nonEmptyColumnList": {
+      "allOf": [
+        { "$ref": "#/$defs/columnList" },
+        { "minItems": 1 }
+      ]
+    },
+    "valueMapEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to"],
+      "properties": {
+        "from": { "$ref": "#/$defs/scalarValue" },
+        "to": { "$ref": "#/$defs/scalarValue" }
+      }
+    },
+    "mapValuesTransform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "column", "entries"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "kind": { "const": "mapValues" },
+        "column": { "$ref": "#/$defs/columnName" },
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/valueMapEntry" }
+        }
+      }
+    },
+    "filterRowsTransform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "column", "operator"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "kind": { "const": "filterRows" },
+        "column": { "$ref": "#/$defs/columnName" },
+        "operator": {
+          "enum": [
+            "equal", "notEqual", "greaterThan", "greaterThanOrEqual",
+            "lessThan", "lessThanOrEqual", "contains", "startsWith",
+            "endsWith", "isBlank", "isNotBlank"
+          ]
+        },
+        "value": { "$ref": "#/$defs/scalarValue" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "operator": { "enum": ["isBlank", "isNotBlank"] } } },
+          "then": { "not": { "required": ["value"] } },
+          "else": { "required": ["value"] }
+        }
+      ]
+    },
+    "totalRowEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["column", "matchKind", "values", "source", "observedMatchCount"],
+      "properties": {
+        "column": { "$ref": "#/$defs/columnName" },
+        "matchKind": { "enum": ["equalsAny", "startsWith", "contains", "isBlank"] },
+        "values": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/scalarValue" }
+        },
+        "source": { "enum": ["profile", "preview", "userConfirmation"] },
+        "observedMatchCount": { "type": "integer", "minimum": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "matchKind": { "const": "isBlank" } } },
+          "then": { "properties": { "values": { "maxItems": 0 } } },
+          "else": { "properties": { "values": { "minItems": 1 } } }
+        }
+      ]
+    },
+    "excludeTotalRowsTransform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "evidence", "requireAllEvidence"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "kind": { "const": "excludeTotalRows" },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/totalRowEvidence" }
+        },
+        "requireAllEvidence": { "type": "boolean" }
+      }
+    },
+    "derivedPeriodColumn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["part", "outputColumn"],
+      "properties": {
+        "part": { "enum": ["year", "half", "quarter", "monthNumber", "monthName", "yearMonth"] },
+        "outputColumn": { "$ref": "#/$defs/columnName" }
+      }
+    },
+    "derivePeriodPartsTransform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "dateColumn", "columns"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "kind": { "const": "derivePeriodParts" },
+        "dateColumn": { "$ref": "#/$defs/columnName" },
+        "columns": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "items": { "$ref": "#/$defs/derivedPeriodColumn" }
+        }
+      }
+    },
+    "arithmeticOperand": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "column"],
+          "properties": {
+            "kind": { "const": "column" },
+            "column": { "$ref": "#/$defs/columnName" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "number"],
+          "properties": {
+            "kind": { "const": "number" },
+            "number": { "type": "number" }
+          }
+        }
+      ]
+    },
+    "addArithmeticColumnTransform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "kind", "outputColumn", "operator", "left", "right",
+        "resultType", "returnNullOnZeroDenominator"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "kind": { "const": "addArithmeticColumn" },
+        "outputColumn": { "$ref": "#/$defs/columnName" },
+        "operator": { "enum": ["add", "subtract", "multiply", "divide"] },
+        "left": { "$ref": "#/$defs/arithmeticOperand" },
+        "right": { "$ref": "#/$defs/arithmeticOperand" },
+        "resultType": { "enum": ["wholeNumber", "decimalNumber"] },
+        "returnNullOnZeroDenominator": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "operator": { "const": "divide" } } },
+          "then": { "properties": { "resultType": { "const": "decimalNumber" } } }
+        }
+      ]
+    },
+    "normalizePeriodsTransform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "periodMappingId"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "kind": { "const": "normalizePeriods" },
+        "periodMappingId": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "measureValueType": {
+      "enum": ["wholeNumber", "number", "currency", "percentage"]
+    },
+    "aggregateFunction": {
+      "enum": ["sum", "count", "distinctCount", "average", "minimum", "maximum"]
+    },
+    "measureFilter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "operator", "values"],
+      "properties": {
+        "field": { "$ref": "#/$defs/columnName" },
+        "operator": {
+          "enum": [
+            "equal", "notEqual", "greaterThan", "greaterThanOrEqual",
+            "lessThan", "lessThanOrEqual", "in", "notIn", "isBlank", "isNotBlank"
+          ]
+        },
+        "values": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nonNullScalarValue" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "operator": { "enum": ["isBlank", "isNotBlank"] } } },
+          "then": { "properties": { "values": { "maxItems": 0 } } }
+        },
+        {
+          "if": { "properties": { "operator": { "enum": ["in", "notIn"] } } },
+          "then": { "properties": { "values": { "minItems": 1, "maxItems": 256 } } },
+          "else": {
+            "if": { "properties": { "operator": { "not": { "enum": ["isBlank", "isNotBlank"] } } } },
+            "then": { "properties": { "values": { "minItems": 1, "maxItems": 1 } } }
+          }
+        }
+      ]
+    },
+    "measureExpression": {
+      "oneOf": [
+        { "$ref": "#/$defs/aggregateExpression" },
+        { "$ref": "#/$defs/filteredAggregateExpression" },
+        { "$ref": "#/$defs/weightedAggregateExpression" },
+        { "$ref": "#/$defs/referenceExpression" },
+        { "$ref": "#/$defs/constantExpression" },
+        { "$ref": "#/$defs/binaryExpression" },
+        { "$ref": "#/$defs/safeDivideExpression" },
+        { "$ref": "#/$defs/ratioExpression" },
+        { "$ref": "#/$defs/differenceExpression" },
+        { "$ref": "#/$defs/shareExpression" }
+      ]
+    },
+    "aggregateExpression": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "resultType", "field", "function"],
+      "properties": {
+        "kind": { "const": "aggregate" },
+        "resultType": { "$ref": "#/$defs/measureValueType" },
+        "field": { "$ref": "#/$defs/columnName" },
+        "function": { "$ref": "#/$defs/aggregateFunction" },
+        "periodSliceId": { "$ref": "#/$defs/identifier" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "function": { "enum": ["count", "distinctCount"] } } },
+          "then": { "properties": { "resultType": { "const": "wholeNumber" } } }
+        },
+        {
+          "if": { "properties": { "function": { "const": "average" } } },
+          "then": { "not": { "properties": { "resultType": { "const": "wholeNumber" } }, "required": ["resultType"] } }
+        }
+      ]
+    },
+    "filteredAggregateExpression": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "resultType", "field", "function", "filters"],
+      "properties": {
+        "kind": { "const": "filteredAggregate" },
+        "resultType": { "$ref": "#/$defs/measureValueType" },
+        "field": { "$ref": "#/$defs/columnName" },
+        "function": { "$ref": "#/$defs/aggregateFunction" },
+        "filters": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/measureFilter" }
+        },
+        "periodSliceId": { "$ref": "#/$defs/identifier" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "function": { "enum": ["count", "distinctCount"] } } },
+          "then": { "properties": { "resultType": { "const": "wholeNumber" } } }
+        },
+        {
+          "if": { "properties": { "function": { "const": "average" } } },
+          "then": { "not": { "properties": { "resultType": { "const": "wholeNumber" } }, "required": ["resultType"] } }
+        }
+      ]
+    },
+    "weightedComponentExpression": {
+      "oneOf": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/aggregateExpression" },
+            { "properties": { "function": { "const": "sum" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/filteredAggregateExpression" },
+            { "properties": { "function": { "const": "sum" } } }
+          ]
+        }
+      ]
+    },
+    "weightedAggregateExpression": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "resultType", "numerator", "denominator", "onZero"],
+      "properties": {
+        "kind": { "const": "weightedAggregate" },
+        "resultType": { "$ref": "#/$defs/measureValueType" },
+        "numerator": { "$ref": "#/$defs/weightedComponentExpression" },
+        "denominator": { "$ref": "#/$defs/weightedComponentExpression" },
+        "onZero": { "enum": ["blank", "zero", "error"] }
+      }
+    },
+    "referenceExpression": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "resultType", "measureId"],
+      "properties": {
+        "kind": { "const": "reference" },
+        "resultType": { "$ref": "#/$defs/measureValueType" },
+        "measureId": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "constantExpression": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "resultType", "value"],
+      "properties": {
+        "kind": { "const": "constant" },
+        "resultType": { "$ref": "#/$defs/measureValueType" },
+        "value": { "type": "number" }
+      }
+    },
+    "binaryExpression": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "resultType", "operator", "left", "right", "returnBlankOnZeroDenominator"],
+      "properties": {
+        "kind": { "const": "binary" },
+        "resultType": { "$ref": "#/$defs/measureValueType" },
+        "operator": { "enum": ["add", "subtract", "multiply", "divide"] },
+        "left": { "$ref": "#/$defs/measureExpression" },
+        "right": { "$ref": "#/$defs/measureExpression" },
+        "returnBlankOnZeroDenominator": { "type": "boolean" }
+      }
+    },
+    "safeDivideExpression": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "resultType", "numerator", "denominator", "onZero", "asPercentage"],
+      "properties": {
+        "kind": { "const": "safeDivide" },
+        "resultType": { "$ref": "#/$defs/measureValueType" },
+        "numerator": { "$ref": "#/$defs/measureExpression" },
+        "denominator": { "$ref": "#/$defs/measureExpression" },
+        "onZero": { "enum": ["blank", "zero", "error"] },
+        "asPercentage": { "type": "boolean" }
+      }
+    },
+    "differenceExpression": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "resultType", "differenceKind", "current", "baseline", "onZero"],
+      "properties": {
+        "kind": { "const": "difference" },
+        "resultType": { "$ref": "#/$defs/measureValueType" },
+        "differenceKind": { "enum": ["absolute", "percentage", "percentagePoints"] },
+        "current": { "$ref": "#/$defs/measureExpression" },
+        "baseline": { "$ref": "#/$defs/measureExpression" },
+        "onZero": { "enum": ["blank", "zero", "error"] }
+      }
+    },
+    "ratioExpression": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "resultType", "numerator", "denominator", "onZero"],
+      "properties": {
+        "kind": { "const": "ratio" },
+        "resultType": { "$ref": "#/$defs/measureValueType" },
+        "numerator": { "$ref": "#/$defs/measureExpression" },
+        "denominator": { "$ref": "#/$defs/measureExpression" },
+        "onZero": { "enum": ["blank", "zero", "error"] }
+      }
+    },
+    "shareExpression": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "resultType", "part", "whole", "onZero", "scope"],
+      "properties": {
+        "kind": { "const": "share" },
+        "resultType": { "$ref": "#/$defs/measureValueType" },
+        "part": { "$ref": "#/$defs/measureExpression" },
+        "whole": { "$ref": "#/$defs/measureExpression" },
+        "onZero": { "enum": ["blank", "zero", "error"] },
+        "scope": { "enum": ["explicit", "parent", "filteredReportTotal"] }
+      }
+    },
+    "measureDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "valueType", "expression"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "label": { "$ref": "#/$defs/label" },
+        "valueType": { "$ref": "#/$defs/measureValueType" },
+        "expression": { "$ref": "#/$defs/measureExpression" },
+        "numberFormat": { "type": "string", "maxLength": 128, "not": { "pattern": "^=" } }
+      }
+    },
+    "subtotal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "placement"],
+      "properties": {
+        "mode": { "enum": ["none", "automatic"] },
+        "placement": { "enum": ["beforeMembers", "afterMembers"] },
+        "label": { "$ref": "#/$defs/label" },
+        "styleId": { "$ref": "#/$defs/identifier" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "none" } } },
+          "then": {
+            "not": {
+              "anyOf": [
+                { "required": ["label"] },
+                { "required": ["styleId"] }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "memberGroupBucket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "members", "includeUnmatched"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "label": { "$ref": "#/$defs/label" },
+        "members": {
+          "type": "array",
+          "maxItems": 1000,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/scalarValue" }
+        },
+        "includeUnmatched": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "includeUnmatched": { "const": false } } },
+          "then": { "properties": { "members": { "minItems": 1 } } }
+        }
+      ]
+    },
+    "topN": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "measureId", "direction", "includeOthers", "othersLabel"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "measureId": { "$ref": "#/$defs/identifier" },
+        "direction": { "enum": ["top", "bottom"] },
+        "includeOthers": { "type": "boolean" },
+        "othersLabel": { "$ref": "#/$defs/label" }
+      }
+    },
+    "fieldPlacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "subtotals", "sort", "memberOrder", "groupBuckets"],
+      "properties": {
+        "field": { "$ref": "#/$defs/columnName" },
+        "caption": { "$ref": "#/$defs/label" },
+        "subtotals": { "$ref": "#/$defs/subtotal" },
+        "sort": { "enum": ["sourceOrder", "ascending", "descending"] },
+        "memberOrder": {
+          "type": "array",
+          "maxItems": 1000,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/scalarValue" }
+        },
+        "groupBuckets": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/memberGroupBucket" }
+        },
+        "topN": { "$ref": "#/$defs/topN" }
+      }
+    },
+    "valuePlacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["measureId", "periodSliceIds"],
+      "properties": {
+        "measureId": { "$ref": "#/$defs/identifier" },
+        "caption": { "$ref": "#/$defs/label" },
+        "numberFormat": { "type": "string", "maxLength": 128, "not": { "pattern": "^=" } },
+        "periodSliceIds": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/identifier" }
+        },
+        "styleId": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "filterPlacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "selectedValues", "includeBlank"],
+      "properties": {
+        "field": { "$ref": "#/$defs/columnName" },
+        "selectedValues": {
+          "type": "array",
+          "maxItems": 1000,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/scalarValue" }
+        },
+        "includeBlank": { "type": "boolean" }
+      }
+    },
+    "denseLayout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repeatRowLabels", "showRowGrandTotals", "showColumnGrandTotals",
+        "insertBlankRows", "rowIndent", "freezeHeaders"
+      ],
+      "properties": {
+        "repeatRowLabels": { "type": "boolean" },
+        "showRowGrandTotals": { "type": "boolean" },
+        "showColumnGrandTotals": { "type": "boolean" },
+        "insertBlankRows": { "type": "boolean" },
+        "rowIndent": { "type": "integer", "minimum": 0, "maximum": 15 },
+        "freezeHeaders": { "type": "boolean" }
+      }
+    },
+    "grandTotals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "showRows", "showColumns", "rowPlacement", "columnPlacement",
+        "rowLabel", "columnLabel"
+      ],
+      "properties": {
+        "showRows": { "type": "boolean" },
+        "showColumns": { "type": "boolean" },
+        "rowPlacement": { "enum": ["beforeMembers", "afterMembers"] },
+        "columnPlacement": { "enum": ["beforeMembers", "afterMembers"] },
+        "rowLabel": { "$ref": "#/$defs/label" },
+        "columnLabel": { "$ref": "#/$defs/label" },
+        "styleId": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "reportLayout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rows", "columns", "values", "filters", "denseLayout", "grandTotals"],
+      "properties": {
+        "rows": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/fieldPlacement" } },
+        "columns": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/fieldPlacement" } },
+        "values": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/valuePlacement" }
+        },
+        "filters": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/filterPlacement" } },
+        "denseLayout": { "$ref": "#/$defs/denseLayout" },
+        "grandTotals": { "$ref": "#/$defs/grandTotals" }
+      }
+    },
+    "periodSlice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "kind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "label": { "$ref": "#/$defs/label" },
+        "kind": { "enum": ["current", "prior", "selected", "samePeriodPriorYear"] },
+        "selectedStart": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T00:00:00(?:\\.0+)?(?:Z|[+-][0-9]{2}:[0-9]{2})?$"
+        },
+        "selectedEnd": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T00:00:00(?:\\.0+)?(?:Z|[+-][0-9]{2}:[0-9]{2})?$"
+        },
+        "basedOnSliceId": { "$ref": "#/$defs/identifier" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "enum": ["current", "selected"] } } },
+          "then": { "required": ["selectedStart", "selectedEnd"] },
+          "else": {
+            "not": {
+              "anyOf": [
+                { "required": ["selectedStart"] },
+                { "required": ["selectedEnd"] }
+              ]
+            }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "enum": ["prior", "samePeriodPriorYear"] } } },
+          "then": { "required": ["basedOnSliceId"] }
+          ,"else": { "not": { "required": ["basedOnSliceId"] } }
+        }
+      ]
+    },
+    "reportHeader": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "relativeRow", "relativeColumn", "columnSpan"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "relativeRow": { "type": "integer", "minimum": 0 },
+        "relativeColumn": { "type": "integer", "minimum": 0 },
+        "columnSpan": { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "styleId": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "spacer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["axis", "beforeLevel", "count"],
+      "properties": {
+        "axis": { "enum": ["row", "column"] },
+        "beforeLevel": { "type": "integer", "minimum": 0 },
+        "count": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "size": { "type": "number", "exclusiveMinimum": 0, "maximum": 409 }
+      }
+    },
+    "reportBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "ownershipId", "worksheetName", "anchorCell", "outputMode", "ownedExtent", "layout",
+        "periodSlices", "headers", "spacers"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "ownershipId": { "$ref": "#/$defs/identifier" },
+        "title": { "$ref": "#/$defs/label" },
+        "worksheetName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 31,
+          "not": { "pattern": "[\\[\\]:*?/\\\\]" }
+        },
+        "anchorCell": { "type": "string", "pattern": "^\\$?[A-Za-z]{1,3}\\$?[1-9][0-9]{0,6}$" },
+        "outputMode": { "enum": ["standardMatrix", "metricStack", "denseGrid"] },
+        "ownedExtent": { "$ref": "#/$defs/ownedRangeExtent" },
+        "layout": { "$ref": "#/$defs/reportLayout" },
+        "periodSlices": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/periodSlice" } },
+        "headers": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/reportHeader" } },
+        "spacers": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/spacer" } },
+        "headerStyleId": { "$ref": "#/$defs/identifier" },
+        "bodyStyleId": { "$ref": "#/$defs/identifier" },
+        "subtotalStyleId": { "$ref": "#/$defs/identifier" },
+        "grandTotalStyleId": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "ownedRangeExtent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rowCount", "columnCount"],
+      "properties": {
+        "rowCount": { "type": "integer", "minimum": 1, "maximum": 1048576 },
+        "columnCount": { "type": "integer", "minimum": 1, "maximum": 16384 }
+      }
+    },
+    "presentationStyle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "bold", "italic", "horizontalAlignment", "topBorder", "bottomBorder"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "bold": { "type": "boolean" },
+        "italic": { "type": "boolean" },
+        "fontColor": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "fillColor": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "horizontalAlignment": { "enum": ["general", "left", "center", "right"] },
+        "numberFormat": { "type": "string", "maxLength": 128, "not": { "pattern": "^=" } },
+        "decimalPlaces": { "type": "integer", "minimum": 0, "maximum": 15 },
+        "topBorder": { "type": "boolean" },
+        "bottomBorder": { "type": "boolean" }
+      }
+    },
+    "reportCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "tolerance"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "kind": {
+          "enum": ["totalPreservation", "noTruncation", "requiredValues", "nonNegative", "balance"]
+        },
+        "measureId": { "$ref": "#/$defs/identifier" },
+        "comparedMeasureId": { "$ref": "#/$defs/identifier" },
+        "tolerance": { "type": "number", "minimum": 0 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "enum": ["totalPreservation", "requiredValues", "nonNegative"] } } },
+          "then": { "required": ["measureId"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "balance" } } },
+          "then": { "required": ["measureId", "comparedMeasureId"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "noTruncation" } } },
+          "then": {
+            "not": {
+              "anyOf": [
+                { "required": ["measureId"] },
+                { "required": ["comparedMeasureId"] }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

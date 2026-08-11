@@ -1,0 +1,31 @@
+name: Bug report
+description: Report a reproducible problem without attaching private workbook material.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not attach a real workbook, export, screenshot, prompt, transcript,
+        endpoint, credential, or company-specific report. Reproduce the issue
+        with synthetic field names and values.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Problem
+      description: What happened and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: synthetic
+    attributes:
+      label: Synthetic reproduction
+      description: Provide generic headers, values, and steps only.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+    validations:
+      required: true

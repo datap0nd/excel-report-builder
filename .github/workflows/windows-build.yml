@@ -1,0 +1,202 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    permissions:
+      contents: read
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run public-safety checks
+        shell: pwsh
+        run: ./scripts/Test-PublicSafety.ps1
+
+      - name: Resolve package version
+        id: version
+        shell: pwsh
+        run: |
+          [xml]$props = Get-Content "Directory.Build.props" -Raw
+          $versionPrefix = [string]($props.Project.PropertyGroup.VersionPrefix | Select-Object -First 1)
+          if ($versionPrefix -notmatch '^\d+\.\d+\.\d+$') {
+              throw "VersionPrefix must be a three-part numeric version."
+          }
+
+          $packageVersion = $versionPrefix
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+              if ($env:GITHUB_REF_NAME -notmatch '^v(?<version>\d+\.\d+\.\d+)$') {
+                  throw "Release tags must use vMAJOR.MINOR.PATCH."
+              }
+              $packageVersion = $Matches.version
+              if ($packageVersion -ne $versionPrefix) {
+                  throw "Tag version $packageVersion does not match VersionPrefix $versionPrefix."
+              }
+          }
+
+          $installerFile = "ExcelReportBuilderSetup-$packageVersion-unsigned.exe"
+          "APP_VERSION=$packageVersion" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "INSTALLER_FILE=$installerFile" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "installer-file=$installerFile" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Add MSBuild
+        uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
+
+      - name: Restore
+        run: dotnet restore ExcelReportBuilder.sln
+
+      - name: Build
+        run: dotnet build ExcelReportBuilder.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test ExcelReportBuilder.sln --configuration Release --no-build --logger "trx;LogFileName=tests.trx"
+
+      - name: Check vulnerable dependencies
+        shell: pwsh
+        run: |
+          $output = dotnet list ExcelReportBuilder.sln package --vulnerable --include-transitive
+          if ($LASTEXITCODE -ne 0) { throw "Dependency vulnerability scan failed to run." }
+          $text = $output -join "`n"
+          if ($text -match 'has the following vulnerable packages') {
+              Write-Host $text
+              throw "Vulnerable package references were found."
+          }
+
+      - name: Publish x64 local worker
+        run: >-
+          dotnet publish src/ExcelReportBuilder.Worker/ExcelReportBuilder.Worker.csproj
+          --configuration Release
+          --runtime win-x64
+          --self-contained true
+          --output artifacts/worker-x64
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+
+      - name: Publish x86 local worker
+        run: >-
+          dotnet publish src/ExcelReportBuilder.Worker/ExcelReportBuilder.Worker.csproj
+          --configuration Release
+          --runtime win-x86
+          --self-contained true
+          --output artifacts/worker-x86
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+
+      - name: Inspect COM registration contract
+        shell: pwsh
+        run: >-
+          & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
+          -NoProfile -STA -File scripts\Test-ComContract.ps1
+
+      - name: Check task-pane accessibility and feedback contract
+        shell: pwsh
+        run: ./scripts/Test-TaskPaneContract.ps1
+
+      - name: Render synthetic task-pane preview
+        shell: pwsh
+        run: >-
+          & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
+          -NoProfile -STA -File scripts\Render-TaskPanePreview.ps1
+
+      - name: Install pinned Inno Setup
+        shell: pwsh
+        run: choco install innosetup --version=6.7.1 --no-progress --yes
+
+      - name: Build unsigned installer
+        shell: pwsh
+        run: >-
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          "/DAppVersion=$env:APP_VERSION"
+          "installer\ExcelReportBuilder.iss"
+
+      - name: Smoke-test install, COM activation, worker handshake, and uninstall
+        shell: pwsh
+        run: ./scripts/Test-Installer.ps1 -InstallerPath "artifacts\$env:INSTALLER_FILE"
+
+      - name: Create checksum
+        shell: pwsh
+        run: |
+          $installer = Resolve-Path "artifacts\$env:INSTALLER_FILE"
+          $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $env:INSTALLER_FILE" | Set-Content "$installer.sha256" -Encoding ascii
+
+      - name: Upload unsigned installer artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ExcelReportBuilderSetupUnsigned
+          path: |
+            artifacts/${{ steps.version.outputs.installer-file }}
+            artifacts/${{ steps.version.outputs.installer-file }}.sha256
+          if-no-files-found: error
+
+      - name: Upload task-pane preview
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: TaskPanePreview
+          path: artifacts/task-pane-preview.png
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Download validated installer
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ExcelReportBuilderSetupUnsigned
+          path: artifacts
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: artifacts
+          format: spdx-json
+          output-file: artifacts/ExcelReportBuilder.spdx.json
+
+      - name: Attest installer provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: artifacts/*-unsigned.exe
+
+      - name: Publish unsigned prototype release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          name: Excel Report Builder ${{ github.ref_name }} (unsigned prototype)
+          body: |
+            This is an unsigned prototype. Windows will show an unknown-publisher warning.
+            Verify the SHA-256 checksum before running the per-user installer.
+          append_body: true
+          generate_release_notes: true
+          prerelease: true
+          files: |
+            artifacts/*-unsigned.exe
+            artifacts/*-unsigned.exe.sha256
+            artifacts/ExcelReportBuilder.spdx.json

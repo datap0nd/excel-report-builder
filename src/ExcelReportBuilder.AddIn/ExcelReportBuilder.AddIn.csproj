@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Library</OutputType>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <AssemblyName>ExcelReportBuilder.AddIn</AssemblyName>
+    <RootNamespace>ExcelReportBuilder.AddIn</RootNamespace>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../ExcelReportBuilder.Agent/ExcelReportBuilder.Agent.csproj" />
+    <ProjectReference Include="../ExcelReportBuilder.Core/ExcelReportBuilder.Core.csproj" />
+    <ProjectReference Include="../ExcelReportBuilder.Excel/ExcelReportBuilder.Excel.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Security" />
+  </ItemGroup>
+</Project>

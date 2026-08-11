@@ -1,0 +1,1603 @@
+<!--
+THESIS: Report building is a visible operations strip where state, ownership, and next action stay legible. It refuses a dashboard made from nested cards.
+OWN-WORLD: Spreadsheet white, cool gray rules, ink green actions, square status fields, compact Segoe UI, tabular timing, and rows aligned like a working sheet.
+STORY: Choose data, confirm periods, place columns, build a managed draft, ask for bounded changes, run checks, then publish only when the gate opens.
+FIRST VIEWPORT: A narrow task pane opens with title and four flat destinations, followed by a live operation strip, one focused work surface, and a ruled activity timeline that never disappears.
+FORM: Operations-strip workbench, candidate 3 of the grounded list; seed key 019ab5be.
+FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
+-->
+<UserControl x:Class="ExcelReportBuilder.AddIn.Views.ReportBuilderView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:activity="clr-namespace:ExcelReportBuilder.AddIn.Activity"
+             xmlns:host="clr-namespace:ExcelReportBuilder.AddIn.Host"
+             xmlns:vm="clr-namespace:ExcelReportBuilder.AddIn.Presentation"
+             MinWidth="320"
+             MinHeight="480"
+             Background="#F7F9F7"
+             Foreground="#1F2924"
+             FontFamily="Segoe UI"
+             FontSize="13"
+             Focusable="True"
+             KeyboardNavigation.TabNavigation="Continue"
+             AutomationProperties.Name="Excel Report Builder workbench">
+    <UserControl.InputBindings>
+        <KeyBinding Key="D1"
+                    Modifiers="Control"
+                    Command="{Binding SelectSurfaceCommand}"
+                    CommandParameter="{x:Static vm:ShellSurface.Data}" />
+        <KeyBinding Key="D2"
+                    Modifiers="Control"
+                    Command="{Binding SelectSurfaceCommand}"
+                    CommandParameter="{x:Static vm:ShellSurface.Build}" />
+        <KeyBinding Key="D3"
+                    Modifiers="Control"
+                    Command="{Binding SelectSurfaceCommand}"
+                    CommandParameter="{x:Static vm:ShellSurface.Chat}" />
+        <KeyBinding Key="D4"
+                    Modifiers="Control"
+                    Command="{Binding SelectSurfaceCommand}"
+                    CommandParameter="{x:Static vm:ShellSurface.Checks}" />
+        <KeyBinding Key="P"
+                    Modifiers="Control"
+                    Command="{Binding TogglePauseCommand}" />
+        <KeyBinding Key="C"
+                    Modifiers="Control+Shift"
+                    Command="{Binding CancelCommand}" />
+        <KeyBinding Key="B"
+                    Modifiers="Control+Shift"
+                    Command="{Binding BuildDraftCommand}" />
+        <KeyBinding Key="Enter"
+                    Modifiers="Control"
+                    Command="{Binding SendChatCommand}" />
+    </UserControl.InputBindings>
+
+    <UserControl.Resources>
+        <SolidColorBrush x:Key="CanvasBrush" Color="#F7F9F7" />
+        <SolidColorBrush x:Key="SurfaceBrush" Color="#FFFFFF" />
+        <SolidColorBrush x:Key="SubtleBrush" Color="#EFF3F0" />
+        <SolidColorBrush x:Key="RuleBrush" Color="#D3DAD5" />
+        <SolidColorBrush x:Key="StrongRuleBrush" Color="#AEBBB3" />
+        <SolidColorBrush x:Key="TextBrush" Color="#1F2924" />
+        <SolidColorBrush x:Key="MutedTextBrush" Color="#52615A" />
+        <SolidColorBrush x:Key="AccentBrush" Color="#1F6B45" />
+        <SolidColorBrush x:Key="AccentHoverBrush" Color="#185537" />
+        <SolidColorBrush x:Key="AccentSoftBrush" Color="#E4F0E9" />
+        <SolidColorBrush x:Key="FocusBrush" Color="#005FCC" />
+        <SolidColorBrush x:Key="DangerBrush" Color="#982F32" />
+        <SolidColorBrush x:Key="DangerSoftBrush" Color="#F7E9E9" />
+        <SolidColorBrush x:Key="WarningBrush" Color="#765100" />
+        <SolidColorBrush x:Key="InfoBrush" Color="#245A77" />
+
+        <Style x:Key="VisibleFocusStyle" TargetType="Control">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate>
+                        <Border BorderBrush="{StaticResource FocusBrush}"
+                                BorderThickness="2"
+                                Margin="-2" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="WorkbenchButton" TargetType="Button">
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Padding" Value="12,5" />
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource StrongRuleBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource VisibleFocusStyle}" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ButtonBorder"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="2"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              RecognizesAccessKey="True" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.48" />
+                                <Setter Property="Cursor" Value="Arrow" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#F2F5F3" />
+                    <Setter Property="BorderBrush" Value="#7E9186" />
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter Property="Background" Value="#E4EAE6" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource WorkbenchButton}">
+            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{StaticResource AccentHoverBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource AccentHoverBrush}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource WorkbenchButton}">
+            <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
+            <Setter Property="BorderBrush" Value="#C79C9E" />
+        </Style>
+
+        <Style x:Key="NavButton" TargetType="Button" BasedOn="{StaticResource WorkbenchButton}">
+            <Setter Property="MinHeight" Value="40" />
+            <Setter Property="Padding" Value="6,4" />
+            <Setter Property="BorderThickness" Value="0,0,0,2" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
+        </Style>
+
+        <Style TargetType="TextBox">
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Padding" Value="8,5" />
+            <Setter Property="BorderBrush" Value="{StaticResource StrongRuleBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Background" Value="White" />
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="CaretBrush" Value="{StaticResource TextBrush}" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource VisibleFocusStyle}" />
+            <Style.Triggers>
+                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                    <Setter Property="BorderBrush" Value="{StaticResource FocusBrush}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style TargetType="ComboBox">
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Padding" Value="6,3" />
+            <Setter Property="BorderBrush" Value="{StaticResource StrongRuleBrush}" />
+            <Setter Property="Background" Value="White" />
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource VisibleFocusStyle}" />
+        </Style>
+
+        <Style TargetType="PasswordBox">
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Padding" Value="8,5" />
+            <Setter Property="BorderBrush" Value="{StaticResource StrongRuleBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Background" Value="White" />
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource VisibleFocusStyle}" />
+            <Style.Triggers>
+                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                    <Setter Property="BorderBrush" Value="{StaticResource FocusBrush}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource VisibleFocusStyle}" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+
+        <Style x:Key="SectionHeading" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="Margin" Value="0,18,0,8" />
+        </Style>
+
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+
+        <Style x:Key="SurfaceScroll" TargetType="ScrollViewer">
+            <Setter Property="Visibility" Value="Collapsed" />
+            <Setter Property="VerticalScrollBarVisibility" Value="Auto" />
+            <Setter Property="HorizontalScrollBarVisibility" Value="Disabled" />
+            <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
+            <Setter Property="Padding" Value="16,12,16,18" />
+        </Style>
+
+        <Style x:Key="FlatDataGrid" TargetType="DataGrid">
+            <Setter Property="AutoGenerateColumns" Value="False" />
+            <Setter Property="CanUserAddRows" Value="False" />
+            <Setter Property="CanUserDeleteRows" Value="False" />
+            <Setter Property="CanUserResizeRows" Value="False" />
+            <Setter Property="GridLinesVisibility" Value="Horizontal" />
+            <Setter Property="HorizontalGridLinesBrush" Value="{StaticResource RuleBrush}" />
+            <Setter Property="VerticalGridLinesBrush" Value="Transparent" />
+            <Setter Property="RowBackground" Value="White" />
+            <Setter Property="AlternatingRowBackground" Value="#F7F9F7" />
+            <Setter Property="HeadersVisibility" Value="Column" />
+            <Setter Property="BorderBrush" Value="{StaticResource RuleBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="Background" Value="White" />
+            <Setter Property="SelectionMode" Value="Single" />
+            <Setter Property="SelectionUnit" Value="FullRow" />
+            <Setter Property="RowHeaderWidth" Value="0" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource VisibleFocusStyle}" />
+        </Style>
+
+        <Style TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="{StaticResource SubtleBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Padding" Value="8,6" />
+            <Setter Property="BorderBrush" Value="{StaticResource RuleBrush}" />
+            <Setter Property="BorderThickness" Value="0,0,1,1" />
+        </Style>
+
+        <Style TargetType="DataGridCell">
+            <Setter Property="Padding" Value="8,5" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource VisibleFocusStyle}" />
+        </Style>
+    </UserControl.Resources>
+
+    <Grid Background="{StaticResource CanvasBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="3*" MinHeight="120" />
+            <RowDefinition Height="5" />
+            <RowDefinition Height="2*" MinHeight="96" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0"
+                Background="{StaticResource SurfaceBrush}"
+                BorderBrush="{StaticResource RuleBrush}"
+                BorderThickness="0,0,0,1">
+            <Grid Margin="16,11,12,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="Excel Report Builder"
+                               FontSize="18"
+                               FontWeight="SemiBold" />
+                    <TextBlock Text="Managed draft workbench"
+                               Margin="0,2,0,0"
+                               Foreground="{StaticResource MutedTextBrush}" />
+                </StackPanel>
+                <Border Grid.Column="1"
+                        VerticalAlignment="Center"
+                        Background="{StaticResource SubtleBrush}"
+                        BorderBrush="{StaticResource RuleBrush}"
+                        BorderThickness="1"
+                        Padding="7,4"
+                        AutomationProperties.Name="Data mode">
+                    <TextBlock Text="{Binding SourceKindLabel}"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               FontSize="11"
+                               TextWrapping="Wrap" />
+                </Border>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="1"
+                Background="{StaticResource SurfaceBrush}"
+                BorderBrush="{StaticResource RuleBrush}"
+                BorderThickness="0,0,0,1">
+            <Grid KeyboardNavigation.TabNavigation="Local">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Button Grid.Column="0"
+                        Content="_Data"
+                        Command="{Binding SelectSurfaceCommand}"
+                        CommandParameter="{x:Static vm:ShellSurface.Data}"
+                        ToolTip="Data, Ctrl+1"
+                        AutomationProperties.Name="Data surface">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource NavButton}">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding CurrentSurface}" Value="{x:Static vm:ShellSurface.Data}">
+                                    <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+                                    <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                    <Setter Property="Background" Value="{StaticResource AccentSoftBrush}" />
+                                    <Setter Property="FontWeight" Value="SemiBold" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+                <Button Grid.Column="1"
+                        Content="_Build"
+                        Command="{Binding SelectSurfaceCommand}"
+                        CommandParameter="{x:Static vm:ShellSurface.Build}"
+                        ToolTip="Build, Ctrl+2"
+                        AutomationProperties.Name="Build surface">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource NavButton}">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding CurrentSurface}" Value="{x:Static vm:ShellSurface.Build}">
+                                    <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+                                    <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                    <Setter Property="Background" Value="{StaticResource AccentSoftBrush}" />
+                                    <Setter Property="FontWeight" Value="SemiBold" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+                <Button Grid.Column="2"
+                        Content="C_hat"
+                        Command="{Binding SelectSurfaceCommand}"
+                        CommandParameter="{x:Static vm:ShellSurface.Chat}"
+                        ToolTip="Chat, Ctrl+3"
+                        AutomationProperties.Name="Chat surface">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource NavButton}">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding CurrentSurface}" Value="{x:Static vm:ShellSurface.Chat}">
+                                    <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+                                    <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                    <Setter Property="Background" Value="{StaticResource AccentSoftBrush}" />
+                                    <Setter Property="FontWeight" Value="SemiBold" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+                <Button Grid.Column="3"
+                        Content="Chec_ks"
+                        Command="{Binding SelectSurfaceCommand}"
+                        CommandParameter="{x:Static vm:ShellSurface.Checks}"
+                        ToolTip="Checks, Ctrl+4"
+                        AutomationProperties.Name="Checks surface">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource NavButton}">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding CurrentSurface}" Value="{x:Static vm:ShellSurface.Checks}">
+                                    <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+                                    <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                    <Setter Property="Background" Value="{StaticResource AccentSoftBrush}" />
+                                    <Setter Property="FontWeight" Value="SemiBold" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="2"
+                Background="{StaticResource SubtleBrush}"
+                BorderBrush="{StaticResource StrongRuleBrush}"
+                BorderThickness="0,0,0,1"
+                AutomationProperties.Name="Current operation status">
+            <Grid Margin="12,8,12,9">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Ellipse Width="8"
+                                 Height="8"
+                                 Margin="0,0,7,0"
+                                 Fill="{Binding Activity.StateBrush}" />
+                        <TextBlock Text="{Binding Activity.StateLabel}"
+                                   FontWeight="SemiBold"
+                                   Foreground="{Binding Activity.StateForeground}" />
+                        <TextBlock Text=" · " Foreground="{StaticResource MutedTextBrush}" />
+                        <TextBlock Text="{Binding Activity.OperationName}"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <Button Grid.Column="1"
+                            Content="{Binding Activity.PauseLabel}"
+                            Command="{Binding TogglePauseCommand}"
+                            Style="{StaticResource WorkbenchButton}"
+                            Margin="8,0,0,0"
+                            Padding="9,3"
+                            MinHeight="28"
+                            ToolTip="Pause or resume, Ctrl+P"
+                            AutomationProperties.Name="Pause or resume current operation" />
+                    <Button Grid.Column="2"
+                            Content="_Cancel"
+                            Command="{Binding CancelCommand}"
+                            Style="{StaticResource DangerButton}"
+                            Margin="6,0,0,0"
+                            Padding="9,3"
+                            MinHeight="28"
+                            ToolTip="Cancel, Ctrl+Shift+C"
+                            AutomationProperties.Name="Cancel current operation" />
+                </Grid>
+                <Grid Grid.Row="1" Margin="0,7,0,5">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Foreground="{StaticResource MutedTextBrush}">
+                        <Run Text="{Binding Activity.StagePositionLabel}" />
+                        <Run Text=" · " />
+                        <Run Text="{Binding Activity.CurrentStageLabel}" />
+                    </TextBlock>
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding Activity.ElapsedLabel}"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               FontFamily="Consolas"
+                               AutomationProperties.Name="Elapsed operation time" />
+                </Grid>
+                <ProgressBar Grid.Row="2"
+                             Height="3"
+                             Minimum="0"
+                             Maximum="100"
+                             Value="{Binding Activity.StageProgress}"
+                             Foreground="{StaticResource AccentBrush}"
+                             Background="#DDE4DF"
+                             BorderThickness="0"
+                             IsTabStop="False"
+                             AutomationProperties.Name="Operation stage progress" />
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="3" Background="{StaticResource SurfaceBrush}">
+            <ScrollViewer AutomationProperties.Name="Data work surface">
+                <ScrollViewer.Style>
+                    <Style TargetType="ScrollViewer" BasedOn="{StaticResource SurfaceScroll}">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding CurrentSurface}" Value="{x:Static vm:ShellSurface.Data}">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </ScrollViewer.Style>
+                <StackPanel>
+                    <TextBlock Text="Data" FontSize="20" FontWeight="SemiBold" />
+                    <TextBlock Text="Choose and confirm the workbook data to use."
+                               Margin="0,3,0,0"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               TextWrapping="Wrap" />
+
+                    <TextBlock Text="Workbook data" Style="{StaticResource SectionHeading}" />
+                    <Border BorderBrush="{StaticResource RuleBrush}"
+                            BorderThickness="0,1,0,1"
+                            Padding="0,10">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="{Binding SourceName}" FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding SourceLocation}"
+                                           Margin="0,2,0,0"
+                                           Foreground="{StaticResource MutedTextBrush}" />
+                                <TextBlock Text="{Binding SourceSummary}"
+                                           Margin="0,2,0,0"
+                                           Foreground="{StaticResource MutedTextBrush}" />
+                            </StackPanel>
+                            <Button Grid.Column="1"
+                                    Content="_Use current data"
+                                    Command="{Binding SelectSourceCommand}"
+                                    Style="{StaticResource WorkbenchButton}"
+                                    Margin="10,0,0,0"
+                                    AutomationProperties.Name="Use current workbook data" />
+                        </Grid>
+                    </Border>
+
+                    <DataGrid ItemsSource="{Binding Columns}"
+                              IsReadOnly="True"
+                              Style="{StaticResource FlatDataGrid}"
+                              MinHeight="118"
+                              MaxHeight="178"
+                              Margin="0,10,0,0"
+                              AutomationProperties.Name="Selected data columns">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Column" Binding="{Binding Name}" Width="*" />
+                            <DataGridTextColumn Header="Type" Binding="{Binding DataType}" Width="80" />
+                            <DataGridTextColumn Header="Sample" Binding="{Binding SampleValue}" Width="110" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <TextBlock Text="Period layout" Style="{StaticResource SectionHeading}" />
+                    <Border BorderBrush="{StaticResource RuleBrush}"
+                            BorderThickness="0,1,0,0"
+                            Padding="0,11,0,0">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,9">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="How periods are stored"
+                                           VerticalAlignment="Center"
+                                           FontWeight="SemiBold" />
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Ellipse Width="7"
+                                             Height="7"
+                                             Margin="0,0,5,0"
+                                             Fill="{Binding PeriodStatusBrush}" />
+                                    <TextBlock Text="{Binding PeriodStatusLabel}"
+                                               Foreground="{Binding PeriodStatusBrush}" />
+                                </StackPanel>
+                            </Grid>
+                            <TextBlock Text="Mode" Style="{StaticResource FieldLabel}" />
+                            <ComboBox ItemsSource="{Binding PeriodModes}"
+                                      SelectedItem="{Binding SelectedPeriodMode, UpdateSourceTrigger=PropertyChanged}"
+                                      AutomationProperties.Name="Period storage mode" />
+                            <TextBlock Text="Period column" Style="{StaticResource FieldLabel}" Margin="0,10,0,4" />
+                            <ComboBox ItemsSource="{Binding AvailableFields}"
+                                      DisplayMemberPath="Name"
+                                      SelectedValuePath="Name"
+                                      SelectedValue="{Binding SelectedPeriodColumn, UpdateSourceTrigger=PropertyChanged}"
+                                      AutomationProperties.Name="Period column" />
+                            <TextBlock Text="Wide-header detection" Style="{StaticResource FieldLabel}" Margin="0,10,0,4" />
+                            <TextBlock Text="Automatic month and metric-month detection"
+                                       Foreground="{StaticResource MutedTextBrush}"
+                                       TextWrapping="Wrap"
+                                       AutomationProperties.Name="Automatic wide period header detection" />
+                            <StackPanel Margin="0,12,0,0">
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsWideHeaderMode}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+
+                                <Border BorderBrush="{StaticResource RuleBrush}"
+                                        BorderThickness="0,1,0,0"
+                                        Padding="0,11,0,0">
+                                    <StackPanel>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="Wide header mapping preview"
+                                                       FontWeight="SemiBold" />
+                                            <TextBlock Grid.Column="1"
+                                                       Text="{Binding MappingPreviewState}"
+                                                       Foreground="{StaticResource MutedTextBrush}" />
+                                        </Grid>
+
+                                        <TextBlock Text="Reporting year" Style="{StaticResource FieldLabel}" Margin="0,10,0,4" />
+                                        <TextBox Text="{Binding ReportingYearText, UpdateSourceTrigger=PropertyChanged}"
+                                                 MaxLength="4"
+                                                 AutomationProperties.Name="Reporting year for month headers"
+                                                 AutomationProperties.HelpText="Required when month headers do not include a year." />
+                                        <TextBlock Text="{Binding ReportingYearRequirementLabel}"
+                                                   Margin="0,3,0,0"
+                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                   FontSize="11"
+                                                   TextWrapping="Wrap" />
+
+                                        <Button Content="_Preview header mapping"
+                                                Command="{Binding PreviewWideHeaderMappingCommand}"
+                                                Style="{StaticResource WorkbenchButton}"
+                                                Margin="0,9,0,0"
+                                                HorizontalAlignment="Left"
+                                                AutomationProperties.Name="Preview wide period header mapping" />
+
+                                        <TextBlock Text="Per-header mapping" Style="{StaticResource FieldLabel}" Margin="0,12,0,4" />
+                                        <DataGrid ItemsSource="{Binding WideHeaderMappings}"
+                                                  IsReadOnly="True"
+                                                  Style="{StaticResource FlatDataGrid}"
+                                                  MinHeight="112"
+                                                  MaxHeight="180"
+                                                  AutomationProperties.Name="Wide source header Period and Metric mappings">
+                                            <DataGrid.Columns>
+                                                <DataGridTextColumn Header="Header" Binding="{Binding SourceHeader}" Width="*" />
+                                                <DataGridTextColumn Header="Period" Binding="{Binding Period}" Width="95" />
+                                                <DataGridTextColumn Header="Metric" Binding="{Binding Metric}" Width="80" />
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+
+                                        <Grid Margin="0,10,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="{Binding ProjectedNormalizedRowsLabel}"
+                                                       FontWeight="SemiBold" />
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                                <Ellipse Width="7"
+                                                         Height="7"
+                                                         Margin="0,0,5,0"
+                                                         Fill="{Binding TotalPreservationBrush}" />
+                                                <TextBlock Text="{Binding TotalPreservationLabel}"
+                                                           Foreground="{Binding TotalPreservationBrush}" />
+                                            </StackPanel>
+                                        </Grid>
+                                        <TextBlock Text="{Binding TotalPreservationDetail}"
+                                                   Margin="0,3,0,0"
+                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                   FontSize="11"
+                                                   TextWrapping="Wrap" />
+
+                                        <TextBlock Text="Sample normalized rows" Style="{StaticResource FieldLabel}" Margin="0,12,0,4" />
+                                        <DataGrid ItemsSource="{Binding NormalizedSampleRows}"
+                                                  IsReadOnly="True"
+                                                  Style="{StaticResource FlatDataGrid}"
+                                                  MinHeight="105"
+                                                  MaxHeight="160"
+                                                  AutomationProperties.Name="Sample normalized rows">
+                                            <DataGrid.Columns>
+                                                <DataGridTextColumn Header="Source" Binding="{Binding SourceRow}" Width="70" />
+                                                <DataGridTextColumn Header="Period" Binding="{Binding Period}" Width="*" />
+                                                <DataGridTextColumn Header="Metric" Binding="{Binding Metric}" Width="82" />
+                                                <DataGridTextColumn Header="Value" Binding="{Binding Value}" Width="82" />
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                            <Button Content="_Confirm period layout"
+                                    Command="{Binding ConfirmPeriodMappingCommand}"
+                                    Style="{StaticResource PrimaryButton}"
+                                    Margin="0,12,0,0"
+                                    HorizontalAlignment="Left"
+                                    AutomationProperties.Name="Confirm period layout" />
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="Preparation steps" Style="{StaticResource SectionHeading}" />
+                    <TextBlock Text="Add deterministic cleanup and reshaping steps in the order they should run. No scripts or free-form formulas are accepted."
+                               Foreground="{StaticResource MutedTextBrush}"
+                               TextWrapping="Wrap" />
+                    <WrapPanel Margin="0,8,0,0">
+                        <Button Content="_Add step"
+                                Command="{Binding AddTransformCommand}"
+                                Style="{StaticResource WorkbenchButton}"
+                                Margin="0,0,6,6"
+                                AutomationProperties.Name="Add data preparation step" />
+                        <Button Content="_Remove step"
+                                Command="{Binding RemoveTransformCommand}"
+                                Style="{StaticResource DangerButton}"
+                                Margin="0,0,0,6"
+                                AutomationProperties.Name="Remove selected data preparation step" />
+                    </WrapPanel>
+                    <DataGrid ItemsSource="{Binding TransformRules}"
+                              SelectedItem="{Binding SelectedTransformRule}"
+                              IsReadOnly="True"
+                              Style="{StaticResource FlatDataGrid}"
+                              MinHeight="86"
+                              MaxHeight="150"
+                              AutomationProperties.Name="Ordered data preparation steps">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Step" Binding="{Binding Operation}" Width="135" />
+                            <DataGridTextColumn Header="Column" Binding="{Binding Column}" Width="*" />
+                            <DataGridTextColumn Header="Output" Binding="{Binding OutputColumn}" Width="95" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                    <Border Background="{StaticResource SubtleBrush}"
+                            BorderBrush="{StaticResource RuleBrush}"
+                            BorderThickness="1"
+                            Margin="0,8,0,0"
+                            Padding="10,9">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SelectedTransformRule}" Value="{x:Null}">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <StackPanel>
+                            <TextBlock Text="Selected preparation step" FontWeight="SemiBold" />
+                            <TextBlock Text="Operation" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                            <ComboBox ItemsSource="{Binding TransformOperations}"
+                                      SelectedItem="{Binding SelectedTransformRule.Operation, UpdateSourceTrigger=PropertyChanged}"
+                                      AutomationProperties.Name="Preparation operation" />
+                            <TextBlock Text="Column" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                            <ComboBox ItemsSource="{Binding AvailableFields}"
+                                      DisplayMemberPath="Name"
+                                      SelectedValuePath="Name"
+                                      SelectedValue="{Binding SelectedTransformRule.Column, UpdateSourceTrigger=PropertyChanged}"
+                                      IsEditable="True"
+                                      AutomationProperties.Name="Preparation source column" />
+                            <TextBlock Text="Output column (when needed)" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                            <TextBox Text="{Binding SelectedTransformRule.OutputColumn, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.Name="Preparation output column" />
+                            <TextBlock Text="Details" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                            <TextBox Text="{Binding SelectedTransformRule.Details, UpdateSourceTrigger=PropertyChanged}"
+                                     MinHeight="52"
+                                     AcceptsReturn="True"
+                                     TextWrapping="Wrap"
+                                     AutomationProperties.Name="Preparation step details"
+                                     AutomationProperties.HelpText="Use semicolons for lists. Mapping uses Old equals greater-than New. Filters use operator colon value. Arithmetic uses operation colon field or number." />
+                            <TextBlock Text="Lists use semicolons. Mappings use Old => New. Filters use operator:value. Arithmetic uses operation:right field or number. Invalid or ambiguous details are rejected before Excel changes."
+                                       Margin="0,4,0,0"
+                                       FontSize="11"
+                                       Foreground="{StaticResource MutedTextBrush}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <ScrollViewer AutomationProperties.Name="Build work surface">
+                <ScrollViewer.Style>
+                    <Style TargetType="ScrollViewer" BasedOn="{StaticResource SurfaceScroll}">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding CurrentSurface}" Value="{x:Static vm:ShellSurface.Build}">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </ScrollViewer.Style>
+                <StackPanel>
+                    <TextBlock Text="Build" FontSize="20" FontWeight="SemiBold" />
+                    <TextBlock Text="Place workbook columns into the report layout."
+                               Margin="0,3,0,0"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               TextWrapping="Wrap" />
+
+                    <TextBlock Text="Saved report setup" Style="{StaticResource SectionHeading}" />
+                    <Border Background="{StaticResource SubtleBrush}"
+                            BorderBrush="{StaticResource RuleBrush}"
+                            BorderThickness="1"
+                            Padding="10,8">
+                        <TextBlock Text="{Binding LastDraftLabel}"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   TextWrapping="Wrap" />
+                    </Border>
+
+                    <TextBlock Text="Output style" Style="{StaticResource SectionHeading}" />
+                    <ComboBox ItemsSource="{Binding OutputStyles}"
+                              SelectedItem="{Binding SelectedOutputStyle, UpdateSourceTrigger=PropertyChanged}"
+                              AutomationProperties.Name="Report output style"
+                              AutomationProperties.HelpText="Choose a standard matrix, a metric stack, or a dense management block." />
+
+                    <TextBlock Text="Place columns" Style="{StaticResource SectionHeading}" />
+                    <TextBlock Text="Selected column" Style="{StaticResource FieldLabel}" />
+                    <ComboBox ItemsSource="{Binding AvailableFields}"
+                              SelectedItem="{Binding SelectedField}"
+                              DisplayMemberPath="Name"
+                              AutomationProperties.Name="Column to place" />
+                    <WrapPanel Margin="0,8,0,0">
+                        <Button Content="Add to _Rows"
+                                Command="{Binding AddPlacementCommand}"
+                                CommandParameter="{x:Static host:PlacementBucket.Rows}"
+                                Style="{StaticResource WorkbenchButton}"
+                                Margin="0,0,6,6"
+                                AutomationProperties.Name="Add selected column to Rows" />
+                        <Button Content="Add to _Columns"
+                                Command="{Binding AddPlacementCommand}"
+                                CommandParameter="{x:Static host:PlacementBucket.Columns}"
+                                Style="{StaticResource WorkbenchButton}"
+                                Margin="0,0,6,6"
+                                AutomationProperties.Name="Add selected column to Columns" />
+                        <Button Content="Add to _Values"
+                                Command="{Binding AddPlacementCommand}"
+                                CommandParameter="{x:Static host:PlacementBucket.Values}"
+                                Style="{StaticResource WorkbenchButton}"
+                                Margin="0,0,6,6"
+                                AutomationProperties.Name="Add selected column to Values" />
+                        <Button Content="Add to _Filters"
+                                Command="{Binding AddPlacementCommand}"
+                                CommandParameter="{x:Static host:PlacementBucket.Filters}"
+                                Style="{StaticResource WorkbenchButton}"
+                                Margin="0,0,0,6"
+                                AutomationProperties.Name="Add selected column to Filters" />
+                    </WrapPanel>
+
+                    <DataGrid ItemsSource="{Binding Placements}"
+                              SelectedItem="{Binding SelectedPlacement}"
+                              IsReadOnly="True"
+                              Style="{StaticResource FlatDataGrid}"
+                              MinHeight="150"
+                              MaxHeight="220"
+                              Margin="0,5,0,0"
+                              AutomationProperties.Name="Rows Columns Values and Filters placements">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Place" Binding="{Binding BucketLabel}" Width="85" />
+                            <DataGridTextColumn Header="Column" Binding="{Binding ColumnName}" Width="*" />
+                            <DataGridTextColumn Header="Setting" Binding="{Binding Setting}" Width="115" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <Border Background="{StaticResource SubtleBrush}"
+                            BorderBrush="{StaticResource RuleBrush}"
+                            BorderThickness="1"
+                            Margin="0,10,0,0"
+                            Padding="10,9"
+                            AutomationProperties.Name="Selected placement settings">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SelectedPlacement}" Value="{x:Null}">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <StackPanel>
+                            <TextBlock Text="Selected placement settings"
+                                       FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding SelectedPlacement.ColumnName}"
+                                       Margin="0,3,0,0"
+                                       Foreground="{StaticResource MutedTextBrush}" />
+
+                            <StackPanel Margin="0,8,0,0">
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SelectedPlacement.Bucket}" Value="{x:Static host:PlacementBucket.Rows}">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding SelectedPlacement.Bucket}" Value="{x:Static host:PlacementBucket.Columns}">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+                                <TextBlock Text="Member order" Style="{StaticResource FieldLabel}" />
+                                <ComboBox ItemsSource="{Binding PlacementSortOptions}"
+                                          SelectedItem="{Binding SelectedPlacement.Setting, UpdateSourceTrigger=PropertyChanged}"
+                                          AutomationProperties.Name="Selected placement member order" />
+                                <CheckBox Content="Show _subtotals"
+                                          IsChecked="{Binding SelectedPlacement.ShowSubtotals, UpdateSourceTrigger=PropertyChanged}"
+                                          Margin="0,9,0,0"
+                                          AutomationProperties.Name="Show subtotals for selected placement" />
+                                <TextBlock Text="Subtotal position" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                                <ComboBox ItemsSource="{Binding SubtotalPlacementOptions}"
+                                          SelectedItem="{Binding SelectedPlacement.SubtotalPlacement, UpdateSourceTrigger=PropertyChanged}"
+                                          IsEnabled="{Binding SelectedPlacement.ShowSubtotals}"
+                                          AutomationProperties.Name="Selected placement subtotal position" />
+                                <TextBlock Text="Explicit order (optional)" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                                <TextBox Text="{Binding SelectedPlacement.MemberOrderText, UpdateSourceTrigger=PropertyChanged}"
+                                         AutomationProperties.Name="Explicit member order"
+                                         AutomationProperties.HelpText="Separate exact member labels with semicolons. Leave blank to use the selected sort order." />
+                            </StackPanel>
+
+                            <StackPanel Margin="0,8,0,0">
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SelectedPlacement.Bucket}" Value="{x:Static host:PlacementBucket.Values}">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+                                <TextBlock Text="Calculation" Style="{StaticResource FieldLabel}" />
+                                <ComboBox ItemsSource="{Binding ValueAggregationOptions}"
+                                          SelectedItem="{Binding SelectedPlacement.Setting, UpdateSourceTrigger=PropertyChanged}"
+                                          AutomationProperties.Name="Selected Value calculation" />
+                                <TextBlock Text="Number display" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                                <ComboBox ItemsSource="{Binding NumberFormatOptions}"
+                                          SelectedItem="{Binding SelectedPlacement.NumberFormat, UpdateSourceTrigger=PropertyChanged}"
+                                          AutomationProperties.Name="Selected Value number display" />
+                            </StackPanel>
+
+                            <StackPanel Margin="0,8,0,0">
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SelectedPlacement.Bucket}" Value="{x:Static host:PlacementBucket.Filters}">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+                                <TextBlock Text="Selected values" Style="{StaticResource FieldLabel}" />
+                                <TextBox Text="{Binding SelectedPlacement.Setting, UpdateSourceTrigger=PropertyChanged}"
+                                         AutomationProperties.Name="Selected Filter values"
+                                         AutomationProperties.HelpText="Use All or separate exact values with semicolons." />
+                                <TextBlock Text="Use All to show the Filter in the report without restricting it. Separate exact values with semicolons."
+                                           Margin="0,3,0,0"
+                                           Foreground="{StaticResource MutedTextBrush}"
+                                           FontSize="11"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                    <WrapPanel Margin="0,8,0,0">
+                        <Button Content="Move _up"
+                                Command="{Binding MovePlacementUpCommand}"
+                                Style="{StaticResource WorkbenchButton}"
+                                Margin="0,0,6,6"
+                                AutomationProperties.Name="Move selected placement up" />
+                        <Button Content="Move _down"
+                                Command="{Binding MovePlacementDownCommand}"
+                                Style="{StaticResource WorkbenchButton}"
+                                Margin="0,0,6,6"
+                                AutomationProperties.Name="Move selected placement down" />
+                        <Button Content="_Remove"
+                                Command="{Binding RemovePlacementCommand}"
+                                Style="{StaticResource DangerButton}"
+                                Margin="0,0,0,6"
+                                AutomationProperties.Name="Remove selected placement" />
+                    </WrapPanel>
+
+                    <TextBlock Text="Calculated metrics" Style="{StaticResource SectionHeading}" />
+                    <TextBlock Text="Build ratios, differences, shares, weighted results, and filtered totals from typed Values. Zero or missing denominators return blank."
+                               Foreground="{StaticResource MutedTextBrush}"
+                               TextWrapping="Wrap" />
+                    <WrapPanel Margin="0,8,0,0">
+                        <Button Content="_Add metric"
+                                Command="{Binding AddCalculatedMetricCommand}"
+                                Style="{StaticResource WorkbenchButton}"
+                                Margin="0,0,6,6"
+                                AutomationProperties.Name="Add calculated metric" />
+                        <Button Content="_Remove metric"
+                                Command="{Binding RemoveCalculatedMetricCommand}"
+                                Style="{StaticResource DangerButton}"
+                                Margin="0,0,0,6"
+                                AutomationProperties.Name="Remove selected calculated metric" />
+                    </WrapPanel>
+                    <DataGrid ItemsSource="{Binding CalculatedMetrics}"
+                              SelectedItem="{Binding SelectedCalculatedMetric}"
+                              IsReadOnly="True"
+                              Style="{StaticResource FlatDataGrid}"
+                              MinHeight="78"
+                              MaxHeight="145"
+                              AutomationProperties.Name="Calculated metrics">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Metric" Binding="{Binding Label}" Width="*" />
+                            <DataGridTextColumn Header="Calculation" Binding="{Binding Kind}" Width="155" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                    <Border Background="{StaticResource SubtleBrush}"
+                            BorderBrush="{StaticResource RuleBrush}"
+                            BorderThickness="1"
+                            Margin="0,8,0,0"
+                            Padding="10,9">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SelectedCalculatedMetric}" Value="{x:Null}">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <StackPanel>
+                            <TextBlock Text="Selected calculated metric" FontWeight="SemiBold" />
+                            <TextBlock Text="Label" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                            <TextBox Text="{Binding SelectedCalculatedMetric.Label, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.Name="Calculated metric label" />
+                            <TextBlock Text="Calculation" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                            <ComboBox ItemsSource="{Binding CalculatedMetricKinds}"
+                                      SelectedItem="{Binding SelectedCalculatedMetric.Kind, UpdateSourceTrigger=PropertyChanged}"
+                                      AutomationProperties.Name="Calculated metric calculation" />
+                            <TextBlock Text="Primary Value or column" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                            <TextBox Text="{Binding SelectedCalculatedMetric.Primary, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.Name="Calculated metric primary input" />
+                            <TextBlock Text="Secondary Value or column" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                            <TextBox Text="{Binding SelectedCalculatedMetric.Secondary, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.Name="Calculated metric secondary input" />
+                            <TextBlock Text="Filters or notes" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                            <TextBox Text="{Binding SelectedCalculatedMetric.Details, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.Name="Calculated metric typed details"
+                                     AutomationProperties.HelpText="Filtered totals use Field equals Value pairs separated by semicolons." />
+                            <TextBlock Text="Number display" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                            <ComboBox ItemsSource="{Binding NumberFormatOptions}"
+                                      SelectedItem="{Binding SelectedCalculatedMetric.NumberFormat, UpdateSourceTrigger=PropertyChanged}"
+                                      AutomationProperties.Name="Calculated metric number display" />
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="Report blocks" Style="{StaticResource SectionHeading}" />
+                    <TextBlock Text="Create up to eight independently anchored managed blocks. Blocks can share a report sheet when their owned ranges do not overlap."
+                               Foreground="{StaticResource MutedTextBrush}"
+                               TextWrapping="Wrap" />
+                    <WrapPanel Margin="0,8,0,0">
+                        <Button Content="Add _block"
+                                Command="{Binding AddReportBlockCommand}"
+                                Style="{StaticResource WorkbenchButton}"
+                                Margin="0,0,6,6"
+                                AutomationProperties.Name="Add report block" />
+                        <Button Content="Remove bloc_k"
+                                Command="{Binding RemoveReportBlockCommand}"
+                                Style="{StaticResource DangerButton}"
+                                Margin="0,0,0,6"
+                                AutomationProperties.Name="Remove selected report block" />
+                    </WrapPanel>
+                    <DataGrid ItemsSource="{Binding ReportBlocks}"
+                              SelectedItem="{Binding SelectedReportBlock}"
+                              IsReadOnly="True"
+                              Style="{StaticResource FlatDataGrid}"
+                              MinHeight="78"
+                              MaxHeight="145"
+                              AutomationProperties.Name="Managed report blocks">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Title" Binding="{Binding Title}" Width="*" />
+                            <DataGridTextColumn Header="Sheet" Binding="{Binding WorksheetName}" Width="105" />
+                            <DataGridTextColumn Header="At" Binding="{Binding AnchorCell}" Width="55" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                    <Border Background="{StaticResource SubtleBrush}"
+                            BorderBrush="{StaticResource RuleBrush}"
+                            BorderThickness="1"
+                            Margin="0,8,0,0"
+                            Padding="10,9">
+                        <StackPanel>
+                            <TextBlock Text="Selected report block" FontWeight="SemiBold" />
+                            <TextBlock Text="Title" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                            <TextBox Text="{Binding SelectedReportBlock.Title, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.Name="Report block title" />
+                            <TextBlock Text="Report sheet" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                            <TextBox Text="{Binding SelectedReportBlock.WorksheetName, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.Name="Report block worksheet" />
+                            <TextBlock Text="Start cell" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                            <TextBox Text="{Binding SelectedReportBlock.AnchorCell, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.Name="Report block anchor cell" />
+                            <TextBlock Text="Managed size"
+                                       Style="{StaticResource FieldLabel}"
+                                       Margin="0,8,0,4" />
+                            <TextBlock Text="Reserve only the rows and columns this block may write. Nearby blocks must not overlap."
+                                       Foreground="{StaticResource MutedTextBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,0,0,6" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                                    <TextBlock Text="Rows" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding SelectedReportBlock.OwnedRows, UpdateSourceTrigger=LostFocus, ValidatesOnExceptions=True}"
+                                             MaxLength="7"
+                                             AutomationProperties.Name="Managed report block rows"
+                                             AutomationProperties.HelpText="Enter 1 to 1,048,576 managed rows." />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Margin="4,0,0,0">
+                                    <TextBlock Text="Columns" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding SelectedReportBlock.OwnedColumns, UpdateSourceTrigger=LostFocus, ValidatesOnExceptions=True}"
+                                             MaxLength="5"
+                                             AutomationProperties.Name="Managed report block columns"
+                                             AutomationProperties.HelpText="Enter 1 to 16,384 managed columns." />
+                                </StackPanel>
+                            </Grid>
+                            <TextBlock Text="Block style" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                            <ComboBox ItemsSource="{Binding OutputStyles}"
+                                      SelectedItem="{Binding SelectedReportBlock.OutputStyle, UpdateSourceTrigger=PropertyChanged}"
+                                      AutomationProperties.Name="Report block output style" />
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="Layout" Style="{StaticResource SectionHeading}" />
+                    <Border BorderBrush="{StaticResource RuleBrush}"
+                            BorderThickness="0,1,0,0"
+                            Padding="0,10,0,0">
+                        <StackPanel>
+                            <CheckBox Content="Repeat row _labels"
+                                      IsChecked="{Binding RepeatRowLabels, UpdateSourceTrigger=PropertyChanged}"
+                                      AutomationProperties.Name="Repeat row labels" />
+                            <CheckBox Content="Insert _blank rows between groups"
+                                      IsChecked="{Binding InsertBlankRows, UpdateSourceTrigger=PropertyChanged}"
+                                      Margin="0,7,0,0"
+                                      AutomationProperties.Name="Insert blank rows between groups" />
+                            <CheckBox Content="_Freeze report headers"
+                                      IsChecked="{Binding FreezeHeaders, UpdateSourceTrigger=PropertyChanged}"
+                                      Margin="0,7,0,0"
+                                      AutomationProperties.Name="Freeze report headers" />
+                            <CheckBox Content="Show row grand _totals"
+                                      IsChecked="{Binding ShowRowGrandTotals, UpdateSourceTrigger=PropertyChanged}"
+                                      Margin="0,7,0,0"
+                                      AutomationProperties.Name="Show row grand totals" />
+                            <CheckBox Content="Show column grand totals"
+                                      IsChecked="{Binding ShowColumnGrandTotals, UpdateSourceTrigger=PropertyChanged}"
+                                      Margin="0,7,0,0"
+                                      AutomationProperties.Name="Show column grand totals" />
+                            <TextBlock Text="Row indent (0 to 15)" Style="{StaticResource FieldLabel}" Margin="0,9,0,4" />
+                            <TextBox Text="{Binding RowIndent, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.Name="Dense report row indent" />
+                            <TextBlock Text="Row total label" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                            <TextBox Text="{Binding RowGrandTotalLabel, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.Name="Row grand total label" />
+                            <TextBlock Text="Column total label" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                            <TextBox Text="{Binding ColumnGrandTotalLabel, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.Name="Column grand total label" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border BorderBrush="{StaticResource RuleBrush}"
+                            BorderThickness="0,1,0,0"
+                            Margin="0,12,0,0"
+                            Padding="0,12,0,0">
+                        <StackPanel>
+                            <TextBlock Text="A build creates a managed draft. It does not publish or save the workbook."
+                                       Foreground="{StaticResource MutedTextBrush}"
+                                       TextWrapping="Wrap" />
+                            <Button Content="_Build managed draft"
+                                    Command="{Binding BuildDraftCommand}"
+                                    Style="{StaticResource PrimaryButton}"
+                                    Margin="0,10,0,0"
+                                    HorizontalAlignment="Left"
+                                    ToolTip="Build, Ctrl+Shift+B"
+                                    AutomationProperties.Name="Build managed draft" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <ScrollViewer AutomationProperties.Name="Chat work surface">
+                <ScrollViewer.Style>
+                    <Style TargetType="ScrollViewer" BasedOn="{StaticResource SurfaceScroll}">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding CurrentSurface}" Value="{x:Static vm:ShellSurface.Chat}">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </ScrollViewer.Style>
+                <StackPanel>
+                    <TextBlock Text="Chat" FontSize="20" FontWeight="SemiBold" />
+                    <TextBlock Text="Ask for bounded changes to the saved report setup."
+                               Margin="0,3,0,0"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               TextWrapping="Wrap" />
+
+                    <TextBlock Text="Model connection" Style="{StaticResource SectionHeading}" />
+                    <Border BorderBrush="{StaticResource RuleBrush}"
+                            BorderThickness="0,1,0,0"
+                            Padding="0,11,0,0">
+                        <StackPanel>
+                            <TextBlock Text="Base URL" Style="{StaticResource FieldLabel}" />
+                            <TextBox Text="{Binding EndpointBaseUrl, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.Name="Model endpoint base URL"
+                                     AutomationProperties.HelpText="Use a local or explicitly configured OpenAI-compatible HTTP endpoint." />
+
+                            <TextBlock Text="API key" Style="{StaticResource FieldLabel}" Margin="0,10,0,4" />
+                            <PasswordBox PasswordChanged="OnApiKeyChanged"
+                                         AutomationProperties.Name="Model endpoint API key"
+                                         AutomationProperties.HelpText="After a successful endpoint call, the key is protected with Windows Current User data protection and is never displayed." />
+                            <TextBlock Text="{Binding ApiKeyStateLabel}"
+                                       Margin="0,3,0,0"
+                                       Foreground="{StaticResource MutedTextBrush}"
+                                       FontSize="11" />
+
+                            <TextBlock Text="Model ID" Style="{StaticResource FieldLabel}" Margin="0,10,0,4" />
+                            <ComboBox ItemsSource="{Binding AvailableModels}"
+                                      Text="{Binding ModelId, UpdateSourceTrigger=PropertyChanged}"
+                                      IsEditable="True"
+                                      IsTextSearchEnabled="False"
+                                      AutomationProperties.Name="Model ID" />
+
+                            <CheckBox Content="Allow remote plain _HTTP"
+                                      IsChecked="{Binding AllowRemoteHttp, UpdateSourceTrigger=PropertyChanged}"
+                                      Margin="0,11,0,0"
+                                      AutomationProperties.Name="Allow remote plain HTTP" />
+                            <TextBlock Text="Remote plain HTTP sends the API key and request without transport encryption. It is blocked unless you explicitly opt in. Localhost HTTP remains allowed."
+                                       Margin="22,3,0,0"
+                                       Foreground="{StaticResource DangerBrush}"
+                                       FontSize="11"
+                                       TextWrapping="Wrap" />
+
+                            <CheckBox Content="Allow this remote endpoint to receive workbook _samples"
+                                      IsChecked="{Binding AllowRemoteWorkbookData, UpdateSourceTrigger=PropertyChanged}"
+                                      Margin="0,11,0,0"
+                                      AutomationProperties.Name="Allow remote endpoint to receive workbook samples" />
+                            <TextBlock Text="Chat sends column names and up to 50 bounded sample rows to a non-local endpoint. The endpoint provider receives that data. Remote chat is blocked until you explicitly opt in. Local endpoints do not need this permission."
+                                       Margin="22,3,0,0"
+                                       Foreground="{StaticResource DangerBrush}"
+                                       FontSize="11"
+                                       TextWrapping="Wrap" />
+
+                            <WrapPanel Margin="0,10,0,0">
+                                <Button Content="_Discover models"
+                                        Command="{Binding DiscoverModelsCommand}"
+                                        Style="{StaticResource WorkbenchButton}"
+                                        Margin="0,0,6,6"
+                                        AutomationProperties.Name="Discover models from endpoint" />
+                                <Button Content="_Check endpoint"
+                                        Command="{Binding CheckEndpointCommand}"
+                                        Style="{StaticResource WorkbenchButton}"
+                                        Margin="0,0,0,6"
+                                        AutomationProperties.Name="Check model endpoint" />
+                            </WrapPanel>
+
+                            <Border Background="{StaticResource SubtleBrush}"
+                                    BorderBrush="{StaticResource RuleBrush}"
+                                    BorderThickness="1"
+                                    Padding="9,8">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Ellipse Width="8"
+                                             Height="8"
+                                             Margin="0,3,8,0"
+                                             VerticalAlignment="Top"
+                                             Fill="{Binding EndpointStateBrush}" />
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="{Binding EndpointStateLabel}"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="{Binding EndpointStateBrush}" />
+                                        <TextBlock Text="{Binding EndpointValidationMessage}"
+                                                   Margin="0,3,0,0"
+                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Background="{StaticResource SubtleBrush}"
+                            BorderBrush="{StaticResource RuleBrush}"
+                            BorderThickness="1"
+                            Margin="0,14,0,0"
+                            Padding="10,8">
+                        <TextBlock Text="The assistant can propose validated report operations only. It cannot run arbitrary formulas, scripts, COM calls, or workbook saves."
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   TextWrapping="Wrap" />
+                    </Border>
+
+                    <ListBox ItemsSource="{Binding ChatLines}"
+                             MinHeight="156"
+                             MaxHeight="260"
+                             Margin="0,12,0,0"
+                             Padding="0"
+                             Background="White"
+                             BorderBrush="{StaticResource RuleBrush}"
+                             BorderThickness="1"
+                             FocusVisualStyle="{StaticResource VisibleFocusStyle}"
+                             AutomationProperties.Name="Chat transcript">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Setter Property="Padding" Value="0" />
+                                <Setter Property="FocusVisualStyle" Value="{StaticResource VisibleFocusStyle}" />
+                                <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleSummary}" />
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border BorderBrush="{StaticResource RuleBrush}"
+                                        BorderThickness="0,0,0,1"
+                                        Padding="10,9">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Speaker}"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="{StaticResource AccentBrush}" />
+                                        <TextBlock Text="{Binding Message}"
+                                                   Margin="0,3,0,0"
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <TextBlock Text="Request" Style="{StaticResource SectionHeading}" />
+                    <TextBox Text="{Binding ChatDraft, UpdateSourceTrigger=PropertyChanged}"
+                             MinHeight="82"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto"
+                             AutomationProperties.Name="Report change request"
+                             AutomationProperties.HelpText="Describe a change to Rows, Columns, Values, Filters, formatting, or checks." />
+                    <Button Content="_Send request"
+                            Command="{Binding SendChatCommand}"
+                            Style="{StaticResource PrimaryButton}"
+                            Margin="0,9,0,0"
+                            HorizontalAlignment="Left"
+                            ToolTip="Send, Ctrl+Enter"
+                            AutomationProperties.Name="Send report change request" />
+                </StackPanel>
+            </ScrollViewer>
+
+            <ScrollViewer AutomationProperties.Name="Checks work surface">
+                <ScrollViewer.Style>
+                    <Style TargetType="ScrollViewer" BasedOn="{StaticResource SurfaceScroll}">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding CurrentSurface}" Value="{x:Static vm:ShellSurface.Checks}">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </ScrollViewer.Style>
+                <StackPanel>
+                    <TextBlock Text="Checks" FontSize="20" FontWeight="SemiBold" />
+                    <TextBlock Text="Review independent checks before publishing."
+                               Margin="0,3,0,0"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               TextWrapping="Wrap" />
+
+                    <TextBlock Text="Required checks" Style="{StaticResource SectionHeading}" />
+                    <TextBlock Text="The builder always adds row-count and rendered-output reconciliation. Add report-specific rules here."
+                               Foreground="{StaticResource MutedTextBrush}"
+                               TextWrapping="Wrap" />
+                    <WrapPanel Margin="0,8,0,0">
+                        <Button Content="_Add check"
+                                Command="{Binding AddRequiredCheckCommand}"
+                                Style="{StaticResource WorkbenchButton}"
+                                Margin="0,0,6,6"
+                                AutomationProperties.Name="Add required check" />
+                        <Button Content="_Remove check"
+                                Command="{Binding RemoveRequiredCheckCommand}"
+                                Style="{StaticResource DangerButton}"
+                                Margin="0,0,0,6"
+                                AutomationProperties.Name="Remove selected required check" />
+                    </WrapPanel>
+                    <DataGrid ItemsSource="{Binding RequiredChecks}"
+                              SelectedItem="{Binding SelectedCheckRule}"
+                              IsReadOnly="True"
+                              Style="{StaticResource FlatDataGrid}"
+                              MinHeight="78"
+                              MaxHeight="145"
+                              AutomationProperties.Name="Configured required checks">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Check" Binding="{Binding Kind}" Width="*" />
+                            <DataGridTextColumn Header="Metric" Binding="{Binding Metric}" Width="120" />
+                            <DataGridTextColumn Header="Tolerance" Binding="{Binding ToleranceText}" Width="75" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                    <Border Background="{StaticResource SubtleBrush}"
+                            BorderBrush="{StaticResource RuleBrush}"
+                            BorderThickness="1"
+                            Margin="0,8,0,0"
+                            Padding="10,9">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SelectedCheckRule}" Value="{x:Null}">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <StackPanel>
+                            <TextBlock Text="Selected required check" FontWeight="SemiBold" />
+                            <TextBlock Text="Check" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                            <ComboBox ItemsSource="{Binding RequiredCheckKinds}"
+                                      SelectedItem="{Binding SelectedCheckRule.Kind, UpdateSourceTrigger=PropertyChanged}"
+                                      AutomationProperties.Name="Required check kind" />
+                            <TextBlock Text="Metric" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                            <TextBox Text="{Binding SelectedCheckRule.Metric, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.Name="Required check metric" />
+                            <TextBlock Text="Compared metric (Balance only)" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                            <TextBox Text="{Binding SelectedCheckRule.ComparedMetric, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.Name="Required check compared metric" />
+                            <TextBlock Text="Tolerance" Style="{StaticResource FieldLabel}" Margin="0,8,0,4" />
+                            <TextBox Text="{Binding SelectedCheckRule.ToleranceText, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.Name="Required check tolerance" />
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="Publish gate" Style="{StaticResource SectionHeading}" />
+                    <Border Background="{StaticResource SubtleBrush}"
+                            BorderBrush="{StaticResource RuleBrush}"
+                            BorderThickness="1"
+                            Padding="10,9">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Ellipse Width="9"
+                                     Height="9"
+                                     Margin="0,3,8,0"
+                                     VerticalAlignment="Top"
+                                     Fill="{Binding PublishGateBrush}" />
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="{Binding PublishGateState}"
+                                           FontWeight="SemiBold"
+                                           Foreground="{Binding PublishGateBrush}" />
+                                <TextBlock Text="{Binding PublishGateLabel}"
+                                           Margin="0,3,0,0"
+                                           Foreground="{StaticResource MutedTextBrush}"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <WrapPanel Margin="0,10,0,0">
+                        <Button Content="_Run checks"
+                                Command="{Binding RunChecksCommand}"
+                                Style="{StaticResource WorkbenchButton}"
+                                Margin="0,0,6,6"
+                                AutomationProperties.Name="Run independent checks" />
+                        <Button Content="_Publish managed draft"
+                                Command="{Binding PublishCommand}"
+                                Style="{StaticResource PrimaryButton}"
+                                Margin="0,0,0,6"
+                                AutomationProperties.Name="Publish checked managed draft" />
+                    </WrapPanel>
+
+                    <TextBlock Text="Check results" Style="{StaticResource SectionHeading}" />
+                    <DataGrid ItemsSource="{Binding CheckLines}"
+                              IsReadOnly="True"
+                              Style="{StaticResource FlatDataGrid}"
+                              MinHeight="155"
+                              MaxHeight="260"
+                              AutomationProperties.Name="Independent check results">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Check" Binding="{Binding Name}" Width="*" />
+                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="70" />
+                            <DataGridTextColumn Header="Detail" Binding="{Binding Detail}" Width="150" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                    <TextBlock Text="No result is trusted until the required checks complete. Failed checks keep publishing blocked."
+                               Margin="0,9,0,0"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               TextWrapping="Wrap" />
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+
+        <GridSplitter Grid.Row="4"
+                      Height="5"
+                      HorizontalAlignment="Stretch"
+                      VerticalAlignment="Stretch"
+                      Background="#C6D0C9"
+                      ResizeDirection="Rows"
+                      ResizeBehavior="PreviousAndNext"
+                      ShowsPreview="True"
+                      FocusVisualStyle="{StaticResource VisibleFocusStyle}"
+                      AutomationProperties.Name="Resize activity timeline" />
+
+        <Border Grid.Row="5"
+                Background="{StaticResource SurfaceBrush}"
+                BorderBrush="{StaticResource StrongRuleBrush}"
+                BorderThickness="0,1,0,0">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Grid Margin="12,8,12,7">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="Activity" FontSize="14" FontWeight="SemiBold" />
+                        <TextBlock Text=" · live timeline"
+                                   Foreground="{StaticResource MutedTextBrush}" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding Activity.ElapsedLabel}"
+                               FontFamily="Consolas"
+                               Foreground="{StaticResource MutedTextBrush}" />
+                </Grid>
+
+                <ListBox x:Name="ActivityList"
+                         Grid.Row="1"
+                         ItemsSource="{Binding Activity.Entries}"
+                         Background="White"
+                         BorderThickness="0"
+                         Padding="0"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         VirtualizingPanel.IsVirtualizing="True"
+                         VirtualizingPanel.VirtualizationMode="Recycling"
+                         FocusVisualStyle="{StaticResource VisibleFocusStyle}"
+                         AutomationProperties.Name="Continuous activity timeline"
+                         AutomationProperties.LiveSetting="Polite">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            <Setter Property="Padding" Value="0" />
+                            <Setter Property="Background" Value="White" />
+                            <Setter Property="FocusVisualStyle" Value="{StaticResource VisibleFocusStyle}" />
+                            <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleSummary}" />
+                            <Style.Triggers>
+                                <Trigger Property="IsSelected" Value="True">
+                                    <Setter Property="Background" Value="{StaticResource AccentSoftBrush}" />
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate DataType="{x:Type activity:ActivityEntry}">
+                            <Grid Background="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=Background}"
+                                  MinHeight="54">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="58" />
+                                    <ColumnDefinition Width="18" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding DisplayTime}"
+                                           Margin="10,9,4,0"
+                                           FontFamily="Consolas"
+                                           FontSize="11"
+                                           Foreground="{StaticResource MutedTextBrush}"
+                                           VerticalAlignment="Top" />
+                                <Border Grid.Column="1"
+                                        Width="1"
+                                        Background="{StaticResource RuleBrush}"
+                                        HorizontalAlignment="Center" />
+                                <Ellipse Grid.Column="1"
+                                         Width="8"
+                                         Height="8"
+                                         VerticalAlignment="Top"
+                                         Margin="0,12,0,0"
+                                         Stroke="White"
+                                         StrokeThickness="2">
+                                    <Ellipse.Style>
+                                        <Style TargetType="Ellipse">
+                                            <Setter Property="Fill" Value="{StaticResource InfoBrush}" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Kind}" Value="{x:Static activity:ActivityKind.Heartbeat}">
+                                                    <Setter Property="Fill" Value="{StaticResource InfoBrush}" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Kind}" Value="{x:Static activity:ActivityKind.Control}">
+                                                    <Setter Property="Fill" Value="{StaticResource WarningBrush}" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Kind}" Value="{x:Static activity:ActivityKind.Check}">
+                                                    <Setter Property="Fill" Value="#5A4B8A" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Kind}" Value="{x:Static activity:ActivityKind.Result}">
+                                                    <Setter Property="Fill" Value="{StaticResource AccentBrush}" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Kind}" Value="{x:Static activity:ActivityKind.Error}">
+                                                    <Setter Property="Fill" Value="{StaticResource DangerBrush}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Ellipse.Style>
+                                </Ellipse>
+                                <StackPanel Grid.Column="2" Margin="5,7,10,8">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding KindLabel}"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="{StaticResource AccentBrush}" />
+                                        <TextBlock Text=" · " Foreground="{StaticResource MutedTextBrush}" />
+                                        <TextBlock Text="{Binding StageLabel}"
+                                                   Foreground="{StaticResource MutedTextBrush}" />
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding Message}"
+                                               Margin="0,2,0,0"
+                                               TextWrapping="Wrap" />
+                                    <TextBlock Text="{Binding Detail}"
+                                               Margin="0,2,0,0"
+                                               Foreground="{StaticResource MutedTextBrush}"
+                                               FontSize="11"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                                <Border Grid.Column="0"
+                                        Grid.ColumnSpan="3"
+                                        VerticalAlignment="Bottom"
+                                        BorderBrush="{StaticResource RuleBrush}"
+                                        BorderThickness="0,0,0,1" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>
