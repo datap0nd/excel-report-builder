@@ -37,7 +37,7 @@ function Get-SbomFileEntry {
     param([Parameter(Mandatory = $true)][string]$RelativePath)
 
     $normalizedPath = $RelativePath.Replace('\', '/').TrimStart([char[]]@('.', '/'))
-    $matches = @($fileEntries | Where-Object {
+    $candidateEntries = @($fileEntries | Where-Object {
         $candidate = Get-NormalizedSbomFileName -FileEntry $_
         [string]::Equals(
             $candidate,
@@ -47,11 +47,11 @@ function Get-SbomFileEntry {
             "/" + $normalizedPath,
             [StringComparison]::OrdinalIgnoreCase)
     })
-    if ($matches.Count -ne 1) {
+    if ($candidateEntries.Count -ne 1) {
         throw "The release SBOM must contain exactly one file entry for $normalizedPath."
     }
 
-    return $matches[0]
+    return $candidateEntries[0]
 }
 
 $payloadPrefix = $resolvedPayload.TrimEnd([char[]]@('\', '/')) + [IO.Path]::DirectorySeparatorChar

@@ -9,7 +9,7 @@ $viewModelPath = "src\ExcelReportBuilder.AddIn\Presentation\ShellViewModel.cs"
 $xaml = Get-Content -LiteralPath $xamlPath -Raw
 $controller = Get-Content -LiteralPath $controllerPath -Raw
 $hostInterface = Get-Content -LiteralPath $hostInterfacePath -Raw
-$host = Get-Content -LiteralPath $hostPath -Raw
+$taskPaneHostSource = Get-Content -LiteralPath $hostPath -Raw
 $syntheticHost = Get-Content -LiteralPath $syntheticHostPath -Raw
 $viewModel = Get-Content -LiteralPath $viewModelPath -Raw
 
@@ -81,15 +81,15 @@ if (-not $syntheticHost.Contains('public Task PersistEndpointSettingsAsync(')) {
 }
 
 $hostDiscovery = Get-SourceSection `
-    -Source $host `
+    -Source $taskPaneHostSource `
     -StartMarker 'public Task<IReadOnlyList<string>> DiscoverModelsAsync(' `
     -EndMarker 'public Task<EndpointCheckResult> CheckEndpointAsync('
 $hostCheck = Get-SourceSection `
-    -Source $host `
+    -Source $taskPaneHostSource `
     -StartMarker 'public Task<EndpointCheckResult> CheckEndpointAsync(' `
     -EndMarker 'public Task PersistEndpointSettingsAsync('
 $hostPersist = Get-SourceSection `
-    -Source $host `
+    -Source $taskPaneHostSource `
     -StartMarker 'public Task PersistEndpointSettingsAsync(' `
     -EndMarker 'public Task<IReadOnlyList<HostCheckResult>> RunChecksAsync('
 
