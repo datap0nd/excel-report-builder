@@ -59,6 +59,62 @@ function Get-PeMachine {
     }
 }
 
+function Invoke-WaitingProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$ArgumentList = @()
+    )
+
+    $process = $null
+    try {
+        $process = Start-Process `
+            -FilePath $FilePath `
+            -ArgumentList $ArgumentList `
+            -Wait `
+            -PassThru
+        return [int]$process.ExitCode
+    }
+    finally {
+        if ($null -ne $process) {
+            $process.Dispose()
+        }
+    }
+}
+
+function Assert-MachineComActivationKeysAbsent {
+    param(
+        [Parameter(Mandatory = $true)][Microsoft.Win32.RegistryView]$View,
+        [Parameter(Mandatory = $true)][string]$Context
+    )
+
+    $paths = @(
+        "Software\Microsoft\Office\Excel\Addins\ExcelReportBuilder.AddIn",
+        "Software\Classes\CLSID\{F953480C-A73C-4121-9E21-18676EC34CE8}",
+        "Software\Classes\CLSID\{A3F4E10D-0DD1-420E-8B6F-E0A654BBEA16}",
+        "Software\Classes\ExcelReportBuilder.AddIn",
+        "Software\Classes\ExcelReportBuilder.TaskPaneHost"
+    )
+    $root = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+        [Microsoft.Win32.RegistryHive]::LocalMachine,
+        $View)
+    try {
+        foreach ($path in $paths) {
+            $key = $root.OpenSubKey($path)
+            try {
+                if ($null -ne $key) {
+                    throw "$Context found machine registration $path in $View."
+                }
+            }
+            finally {
+                if ($null -ne $key) { $key.Dispose() }
+            }
+        }
+    }
+    finally {
+        $root.Dispose()
+    }
+}
+
 function Invoke-ComActivationSmoke {
     param(
         [Parameter(Mandatory = $true)][string]$ScriptPath,
@@ -96,10 +152,12 @@ foreach ($progId in @(
             [pscustomobject]@{
                 PowerShell = "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
                 RegAsm = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\RegAsm.exe"
+                View = [Microsoft.Win32.RegistryView]::Registry64
             },
             [pscustomobject]@{
                 PowerShell = "$env:WINDIR\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
                 RegAsm = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\RegAsm.exe"
+                View = [Microsoft.Win32.RegistryView]::Registry32
             }
         )
     }
@@ -108,11 +166,20 @@ foreach ($progId in @(
             [pscustomobject]@{
                 PowerShell = "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
                 RegAsm = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\RegAsm.exe"
+                View = [Microsoft.Win32.RegistryView]::Registry32
             }
         )
     }
 
     foreach ($activationHost in $activationHosts) {
+        Assert-MachineComActivationKeysAbsent `
+            -View $activationHost.View `
+            -Context "COM activation preflight"
+    }
+
+    foreach ($activationHost in $activationHosts) {
+        $primaryError = $null
+        $cleanupFailures = @()
         try {
             & $activationHost.RegAsm $AssemblyPath /codebase /nologo
             if ($LASTEXITCODE -ne 0) {
@@ -124,11 +191,45 @@ foreach ($progId in @(
                 throw "Installed COM activation failed in $($activationHost.PowerShell)."
             }
         }
+        catch {
+            $primaryError = $_
+        }
         finally {
-            & $activationHost.RegAsm $AssemblyPath /unregister /nologo
-            if ($LASTEXITCODE -ne 0) {
-                throw "Temporary COM registration cleanup failed in $($activationHost.RegAsm)."
+            try {
+                & $activationHost.RegAsm $AssemblyPath /unregister /nologo
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Temporary COM registration cleanup failed in $($activationHost.RegAsm)."
+                }
             }
+            catch {
+                $cleanupFailures += $_.Exception.Message
+            }
+
+            try {
+                Assert-MachineComActivationKeysAbsent `
+                    -View $activationHost.View `
+                    -Context "Temporary COM cleanup"
+            }
+            catch {
+                $cleanupFailures += $_.Exception.Message
+            }
+        }
+
+        if ($null -ne $primaryError) {
+            if ($cleanupFailures.Count -gt 0) {
+                try {
+                    Write-Warning (
+                        "Temporary COM cleanup also failed after the primary activation failure: " +
+                        ($cleanupFailures -join " "))
+                }
+                catch {
+                    # Diagnostics must never replace the primary activation error.
+                }
+            }
+            throw $primaryError
+        }
+        if ($cleanupFailures.Count -gt 0) {
+            throw ($cleanupFailures -join " ")
         }
     }
 }
@@ -179,15 +280,20 @@ function Invoke-WorkerHandshakeSmoke {
 
     $workerProcess = [Diagnostics.Process]::new()
     $workerProcess.StartInfo = $startInfo
-    if (-not $workerProcess.Start()) {
-        throw "The installed worker could not be started."
-    }
-    [void]$startInfo.EnvironmentVariables.Remove(
-        "EXCEL_REPORT_BUILDER_WORKER_HANDSHAKE_SECRET")
-
+    $workerStarted = $false
     $pipe = $null
     $handshakeCompleted = $false
+    $workerPrimaryError = $null
+    $workerDiagnostic = ""
+    $workerCleanupFailures = @()
     try {
+        if (-not $workerProcess.Start()) {
+            throw "The installed worker could not be started."
+        }
+        $workerStarted = $true
+        [void]$startInfo.EnvironmentVariables.Remove(
+            "EXCEL_REPORT_BUILDER_WORKER_HANDSHAKE_SECRET")
+
         $pipe = [IO.Pipes.NamedPipeClientStream]::new(
             ".",
             $pipeName,
@@ -275,36 +381,150 @@ function Invoke-WorkerHandshakeSmoke {
         $handshakeCompleted = $true
     }
     catch {
-        $diagnostic = if ($workerProcess.HasExited) {
-            $workerProcess.StandardError.ReadToEnd().Trim()
+        $workerPrimaryError = $_
+        if ($workerStarted) {
+            try {
+                if ($workerProcess.HasExited) {
+                    $workerDiagnostic = $workerProcess.StandardError.ReadToEnd().Trim()
+                }
+            }
+            catch {
+                $workerCleanupFailures += (
+                    "Worker diagnostic collection failed: " + $_.Exception.Message)
+            }
         }
-        else {
-            ""
-        }
-        if ($diagnostic) {
-            throw "Worker handshake failed: $diagnostic"
-        }
-        throw
     }
     finally {
-        if ($null -ne $pipe) { $pipe.Dispose() }
-        if (-not $workerProcess.HasExited) {
-            if (-not $workerProcess.WaitForExit(5000)) {
-                $workerProcess.Kill()
-                $workerProcess.WaitForExit(5000) | Out-Null
-                if ($handshakeCompleted) {
-                    throw "The installed worker did not exit after its one authenticated connection."
+        try {
+            [void]$startInfo.EnvironmentVariables.Remove(
+                "EXCEL_REPORT_BUILDER_WORKER_HANDSHAKE_SECRET")
+        }
+        catch {
+            $workerCleanupFailures += (
+                "Worker cleanup could not remove the launch secret: " + $_.Exception.Message)
+        }
+
+        if ($null -ne $pipe) {
+            try {
+                $pipe.Dispose()
+            }
+            catch {
+                $workerCleanupFailures += (
+                    "Worker pipe cleanup failed: " + $_.Exception.Message)
+            }
+        }
+
+        $workerExited = $false
+        $workerExitKnown = $false
+        $workerWasKilled = $false
+        if ($workerStarted) {
+            try {
+                $workerExited = $workerProcess.HasExited
+                $workerExitKnown = $true
+            }
+            catch {
+                $workerCleanupFailures += (
+                    "Worker exit-state check failed: " + $_.Exception.Message)
+            }
+
+            if (-not $workerExitKnown -or -not $workerExited) {
+                try {
+                    $workerExited = $workerProcess.WaitForExit(5000)
+                    $workerExitKnown = $true
+                }
+                catch {
+                    $workerCleanupFailures += (
+                        "Worker exit wait failed: " + $_.Exception.Message)
+                }
+
+                if (-not $workerExited) {
+                    if ($handshakeCompleted) {
+                        $workerCleanupFailures += (
+                            "The installed worker did not exit after its one authenticated connection.")
+                    }
+                    $workerWasKilled = $true
+                    try {
+                        $workerProcess.Kill()
+                    }
+                    catch {
+                        $workerCleanupFailures += (
+                            "Worker termination failed: " + $_.Exception.Message)
+                    }
+                    try {
+                        $workerExited = $workerProcess.WaitForExit(5000)
+                        $workerExitKnown = $true
+                        if (-not $workerExited) {
+                            $workerCleanupFailures += (
+                                "The installed worker remained running after termination.")
+                        }
+                    }
+                    catch {
+                        $workerCleanupFailures += (
+                            "Worker post-termination wait failed: " + $_.Exception.Message)
+                    }
+                }
+            }
+
+            if ($handshakeCompleted -and
+                $workerExitKnown -and
+                $workerExited -and
+                -not $workerWasKilled) {
+                try {
+                    if ($workerProcess.ExitCode -ne 0) {
+                        $workerCleanupFailures += (
+                            "The installed worker exited with code $($workerProcess.ExitCode) " +
+                            "after a valid handshake.")
+                    }
+                }
+                catch {
+                    $workerCleanupFailures += (
+                        "Worker exit-code check failed: " + $_.Exception.Message)
                 }
             }
         }
-        if ($handshakeCompleted -and $workerProcess.ExitCode -ne 0) {
-            throw "The installed worker exited with code $($workerProcess.ExitCode) after a valid handshake."
+
+        try {
+            $workerProcess.Dispose()
         }
-        $workerProcess.Dispose()
-        [Array]::Clear($secretBytes, 0, $secretBytes.Length)
-        if ($null -ne (Get-Variable nonceBytes -ErrorAction SilentlyContinue)) {
-            [Array]::Clear($nonceBytes, 0, $nonceBytes.Length)
+        catch {
+            $workerCleanupFailures += (
+                "Worker process cleanup failed: " + $_.Exception.Message)
         }
+        try {
+            [Array]::Clear($secretBytes, 0, $secretBytes.Length)
+            if ($null -ne (Get-Variable nonceBytes -ErrorAction SilentlyContinue)) {
+                [Array]::Clear($nonceBytes, 0, $nonceBytes.Length)
+            }
+        }
+        catch {
+            $workerCleanupFailures += (
+                "Worker secret cleanup failed: " + $_.Exception.Message)
+        }
+    }
+
+    if ($null -ne $workerPrimaryError) {
+        if ($workerDiagnostic) {
+            try {
+                Write-Warning "Worker diagnostic after handshake failure: $workerDiagnostic"
+            }
+            catch {
+                # Diagnostics must never replace the primary handshake error.
+            }
+        }
+        if ($workerCleanupFailures.Count -gt 0) {
+            try {
+                Write-Warning (
+                    "Worker cleanup also failed after the primary handshake failure: " +
+                    ($workerCleanupFailures -join " "))
+            }
+            catch {
+                # Diagnostics must never replace the primary handshake error.
+            }
+        }
+        throw $workerPrimaryError
+    }
+    if ($workerCleanupFailures.Count -gt 0) {
+        throw ($workerCleanupFailures -join " ")
     }
 
     $rejectedPipeName = "excel-report-builder-installer-reject-" +
@@ -320,25 +540,83 @@ function Invoke-WorkerHandshakeSmoke {
         "EXCEL_REPORT_BUILDER_WORKER_HANDSHAKE_SECRET")
     $rejectedProcess = [Diagnostics.Process]::new()
     $rejectedProcess.StartInfo = $rejectedStartInfo
+    $rejectedStarted = $false
+    $rejectedPrimaryError = $null
+    $rejectedCleanupFailures = @()
     try {
         if (-not $rejectedProcess.Start()) {
             throw "The installed worker could not be started for the fail-closed test."
         }
+        $rejectedStarted = $true
         if (-not $rejectedProcess.WaitForExit(5000)) {
-            $rejectedProcess.Kill()
-            $rejectedProcess.WaitForExit(5000) | Out-Null
             throw "The worker did not reject a launch without authentication."
         }
         if ($rejectedProcess.ExitCode -eq 0) {
             throw "The worker accepted a launch without authentication."
         }
     }
+    catch {
+        $rejectedPrimaryError = $_
+    }
     finally {
-        if (-not $rejectedProcess.HasExited) {
-            $rejectedProcess.Kill()
-            $rejectedProcess.WaitForExit(5000) | Out-Null
+        if ($rejectedStarted) {
+            $rejectedExited = $false
+            $rejectedExitKnown = $false
+            try {
+                $rejectedExited = $rejectedProcess.HasExited
+                $rejectedExitKnown = $true
+            }
+            catch {
+                $rejectedCleanupFailures += (
+                    "Rejected-worker exit-state check failed: " + $_.Exception.Message)
+            }
+
+            if (-not $rejectedExitKnown -or -not $rejectedExited) {
+                try {
+                    $rejectedProcess.Kill()
+                }
+                catch {
+                    $rejectedCleanupFailures += (
+                        "Rejected-worker termination failed: " + $_.Exception.Message)
+                }
+                try {
+                    $rejectedExited = $rejectedProcess.WaitForExit(5000)
+                    if (-not $rejectedExited) {
+                        $rejectedCleanupFailures += (
+                            "The rejected worker remained running after termination.")
+                    }
+                }
+                catch {
+                    $rejectedCleanupFailures += (
+                        "Rejected-worker exit wait failed: " + $_.Exception.Message)
+                }
+            }
         }
-        $rejectedProcess.Dispose()
+
+        try {
+            $rejectedProcess.Dispose()
+        }
+        catch {
+            $rejectedCleanupFailures += (
+                "Rejected-worker process cleanup failed: " + $_.Exception.Message)
+        }
+    }
+
+    if ($null -ne $rejectedPrimaryError) {
+        if ($rejectedCleanupFailures.Count -gt 0) {
+            try {
+                Write-Warning (
+                    "Rejected-worker cleanup also failed after the primary fail-closed error: " +
+                    ($rejectedCleanupFailures -join " "))
+            }
+            catch {
+                # Diagnostics must never replace the primary fail-closed error.
+            }
+        }
+        throw $rejectedPrimaryError
+    }
+    if ($rejectedCleanupFailures.Count -gt 0) {
+        throw ($rejectedCleanupFailures -join " ")
     }
 }
 
@@ -399,14 +677,140 @@ function Remove-PerUserComActivationKeys {
     }
 }
 
-function Assert-PerUserComActivationKeysPresent {
-    param([Parameter(Mandatory = $true)][Microsoft.Win32.RegistryView[]]$Views)
+function Get-RequiredRegistryValue {
+    param(
+        [Parameter(Mandatory = $true)][Microsoft.Win32.RegistryKey]$Root,
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string]$ValueName = "",
+        [Parameter(Mandatory = $true)]
+        [Microsoft.Win32.RegistryValueKind]$ExpectedKind,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
 
-    $paths = @(
-        "Software\Classes\CLSID\{F953480C-A73C-4121-9E21-18676EC34CE8}",
-        "Software\Classes\CLSID\{A3F4E10D-0DD1-420E-8B6F-E0A654BBEA16}",
-        "Software\Classes\ExcelReportBuilder.AddIn",
-        "Software\Classes\ExcelReportBuilder.TaskPaneHost"
+    $key = $Root.OpenSubKey($Path)
+    if ($null -eq $key) {
+        throw "$Label key is missing."
+    }
+    try {
+        $value = $key.GetValue(
+            $ValueName,
+            $null,
+            [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        if ($null -eq $value) {
+            $displayName = if ($ValueName) { $ValueName } else { "(Default)" }
+            throw "$Label value $displayName is missing."
+        }
+        $actualKind = $key.GetValueKind($ValueName)
+        if ($actualKind -ne $ExpectedKind) {
+            $displayName = if ($ValueName) { $ValueName } else { "(Default)" }
+            throw (
+                "$Label value $displayName has registry kind $actualKind; " +
+                "expected $ExpectedKind.")
+        }
+        return $value
+    }
+    finally {
+        $key.Dispose()
+    }
+}
+
+function Assert-RegistryValueEquals {
+    param(
+        [Parameter(Mandatory = $true)][Microsoft.Win32.RegistryKey]$Root,
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string]$ValueName = "",
+        [Parameter(Mandatory = $true)]
+        [Microsoft.Win32.RegistryValueKind]$ExpectedKind,
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [object]$ExpectedValue,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    $actualValue = Get-RequiredRegistryValue `
+        -Root $Root `
+        -Path $Path `
+        -ValueName $ValueName `
+        -ExpectedKind $ExpectedKind `
+        -Label $Label
+    $matches = if ($ExpectedKind -in @(
+            [Microsoft.Win32.RegistryValueKind]::String,
+            [Microsoft.Win32.RegistryValueKind]::ExpandString)) {
+        [string]::Equals(
+            [string]$actualValue,
+            [string]$ExpectedValue,
+            [StringComparison]::Ordinal)
+    }
+    else {
+        [object]::Equals($actualValue, $ExpectedValue)
+    }
+    if (-not $matches) {
+        $displayName = if ($ValueName) { $ValueName } else { "(Default)" }
+        throw "$Label value $displayName is wrong."
+    }
+}
+
+function Assert-CodeBaseContract {
+    param(
+        [Parameter(Mandatory = $true)][string]$RegisteredCodeBase,
+        [Parameter(Mandatory = $true)][string]$AssemblyPath,
+        [Parameter(Mandatory = $true)][Microsoft.Win32.RegistryView]$View,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    $codeBaseUri = [Uri]::new($RegisteredCodeBase, [UriKind]::Absolute)
+    if (-not $codeBaseUri.IsFile -or
+        -not [string]::IsNullOrEmpty($codeBaseUri.Query) -or
+        -not [string]::IsNullOrEmpty($codeBaseUri.Fragment) -or
+        -not [string]::Equals(
+            [IO.Path]::GetFullPath($codeBaseUri.LocalPath),
+            [IO.Path]::GetFullPath($AssemblyPath),
+            [StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Label CodeBase is not a safe URL for the installed assembly in $View."
+    }
+    if ($RegisteredCodeBase.Contains("#") -or
+        -not $RegisteredCodeBase.Contains("%23") -or
+        -not $RegisteredCodeBase.Contains("%25")) {
+        throw "$Label CodeBase did not escape reserved path characters in $View."
+    }
+}
+
+function Assert-InstalledPerUserRegistration {
+    param(
+        [Parameter(Mandatory = $true)][Microsoft.Win32.RegistryView[]]$Views,
+        [Parameter(Mandatory = $true)][string]$AssemblyPath,
+        [Parameter(Mandatory = $true)][string]$AppClsid,
+        [Parameter(Mandatory = $true)][string]$PaneClsid
+    )
+
+    $appName = "Excel Report Builder"
+    $assemblyVersion = "0.1.0.0"
+    $assemblyName = (
+        "ExcelReportBuilder.AddIn, Version=$assemblyVersion, " +
+        "Culture=neutral, PublicKeyToken=null")
+    $runtimeVersion = "v4.0.30319"
+    $managedCategory = "{62C8FE65-4EBB-45E7-B440-6E39B2CDBF29}"
+    $controlCategory = "{40FC6ED4-2438-11CF-A3DB-080036F12502}"
+    $stringKind = [Microsoft.Win32.RegistryValueKind]::String
+    $dwordKind = [Microsoft.Win32.RegistryValueKind]::DWord
+
+    $contracts = @(
+        [pscustomobject]@{
+            ProgId = "ExcelReportBuilder.AddIn"
+            Clsid = $AppClsid
+            ClassName = "ExcelReportBuilder.AddIn.Com.ExcelReportBuilderAddIn"
+            DisplayName = $appName
+            IsControl = $false
+            Label = "Excel add-in COM"
+        },
+        [pscustomobject]@{
+            ProgId = "ExcelReportBuilder.TaskPaneHost"
+            Clsid = $PaneClsid
+            ClassName = "ExcelReportBuilder.AddIn.Hosting.TaskPaneHost"
+            DisplayName = "$appName task pane"
+            IsControl = $true
+            Label = "Task-pane COM"
+        }
     )
 
     foreach ($view in $Views) {
@@ -414,20 +818,180 @@ function Assert-PerUserComActivationKeysPresent {
             [Microsoft.Win32.RegistryHive]::CurrentUser,
             $view)
         try {
-            foreach ($path in $paths) {
-                $key = $root.OpenSubKey($path)
-                try {
-                    if ($null -eq $key) {
-                        throw "Installer repair did not restore $path in $view."
-                    }
+            $addinPath = "Software\Microsoft\Office\Excel\Addins\ExcelReportBuilder.AddIn"
+            foreach ($addinValue in @(
+                [pscustomobject]@{
+                    Name = "FriendlyName"
+                    Value = $appName
+                    Kind = $stringKind
+                },
+                [pscustomobject]@{
+                    Name = "Description"
+                    Value = "Build validated dense management reports from one workbook source."
+                    Kind = $stringKind
+                },
+                [pscustomobject]@{
+                    Name = "LoadBehavior"
+                    Value = [int]3
+                    Kind = $dwordKind
+                },
+                [pscustomobject]@{
+                    Name = "CommandLineSafe"
+                    Value = [int]0
+                    Kind = $dwordKind
                 }
-                finally {
-                    if ($null -ne $key) { $key.Dispose() }
+            )) {
+                Assert-RegistryValueEquals `
+                    -Root $root `
+                    -Path $addinPath `
+                    -ValueName $addinValue.Name `
+                    -ExpectedKind $addinValue.Kind `
+                    -ExpectedValue $addinValue.Value `
+                    -Label "Excel add-in registration in $view"
+            }
+
+            foreach ($contract in $contracts) {
+                $clsidPath = "Software\Classes\CLSID\$($contract.Clsid)"
+                $inprocPath = "$clsidPath\InprocServer32"
+                $versionedPath = "$inprocPath\$assemblyVersion"
+                $progIdPath = "Software\Classes\$($contract.ProgId)"
+
+                Assert-RegistryValueEquals `
+                    -Root $root `
+                    -Path $clsidPath `
+                    -ExpectedKind $stringKind `
+                    -ExpectedValue $contract.DisplayName `
+                    -Label "$($contract.Label) registration in $view"
+
+                foreach ($inprocValue in @(
+                    [pscustomobject]@{ Name = ""; Value = "mscoree.dll" },
+                    [pscustomobject]@{ Name = "ThreadingModel"; Value = "Both" },
+                    [pscustomobject]@{ Name = "Class"; Value = $contract.ClassName },
+                    [pscustomobject]@{ Name = "Assembly"; Value = $assemblyName },
+                    [pscustomobject]@{ Name = "RuntimeVersion"; Value = $runtimeVersion }
+                )) {
+                    Assert-RegistryValueEquals `
+                        -Root $root `
+                        -Path $inprocPath `
+                        -ValueName $inprocValue.Name `
+                        -ExpectedKind $stringKind `
+                        -ExpectedValue $inprocValue.Value `
+                        -Label "$($contract.Label) registration in $view"
+                }
+
+                $registeredCodeBase = [string](Get-RequiredRegistryValue `
+                    -Root $root `
+                    -Path $inprocPath `
+                    -ValueName "CodeBase" `
+                    -ExpectedKind $stringKind `
+                    -Label "$($contract.Label) registration in $view")
+                Assert-CodeBaseContract `
+                    -RegisteredCodeBase $registeredCodeBase `
+                    -AssemblyPath $AssemblyPath `
+                    -View $view `
+                    -Label $contract.Label
+
+                foreach ($versionedValue in @(
+                    [pscustomobject]@{ Name = "Class"; Value = $contract.ClassName },
+                    [pscustomobject]@{ Name = "Assembly"; Value = $assemblyName },
+                    [pscustomobject]@{ Name = "RuntimeVersion"; Value = $runtimeVersion }
+                )) {
+                    Assert-RegistryValueEquals `
+                        -Root $root `
+                        -Path $versionedPath `
+                        -ValueName $versionedValue.Name `
+                        -ExpectedKind $stringKind `
+                        -ExpectedValue $versionedValue.Value `
+                        -Label "$($contract.Label) versioned registration in $view"
+                }
+                $versionedCodeBase = [string](Get-RequiredRegistryValue `
+                    -Root $root `
+                    -Path $versionedPath `
+                    -ValueName "CodeBase" `
+                    -ExpectedKind $stringKind `
+                    -Label "$($contract.Label) versioned registration in $view")
+                Assert-CodeBaseContract `
+                    -RegisteredCodeBase $versionedCodeBase `
+                    -AssemblyPath $AssemblyPath `
+                    -View $view `
+                    -Label "$($contract.Label) versioned"
+
+                Assert-RegistryValueEquals `
+                    -Root $root `
+                    -Path "$clsidPath\ProgId" `
+                    -ExpectedKind $stringKind `
+                    -ExpectedValue $contract.ProgId `
+                    -Label "$($contract.Label) ProgId registration in $view"
+                Assert-RegistryValueEquals `
+                    -Root $root `
+                    -Path $progIdPath `
+                    -ExpectedKind $stringKind `
+                    -ExpectedValue $contract.DisplayName `
+                    -Label "$($contract.Label) ProgId registration in $view"
+                Assert-RegistryValueEquals `
+                    -Root $root `
+                    -Path "$progIdPath\CLSID" `
+                    -ExpectedKind $stringKind `
+                    -ExpectedValue $contract.Clsid `
+                    -Label "$($contract.Label) CLSID registration in $view"
+                Assert-RegistryValueEquals `
+                    -Root $root `
+                    -Path "$clsidPath\Implemented Categories\$managedCategory" `
+                    -ExpectedKind $stringKind `
+                    -ExpectedValue "" `
+                    -Label "$($contract.Label) managed category in $view"
+
+                if ($contract.IsControl) {
+                    foreach ($controlPath in @(
+                        "$clsidPath\Implemented Categories\$controlCategory",
+                        "$clsidPath\Programmable",
+                        "$clsidPath\Control"
+                    )) {
+                        Assert-RegistryValueEquals `
+                            -Root $root `
+                            -Path $controlPath `
+                            -ExpectedKind $stringKind `
+                            -ExpectedValue "" `
+                            -Label "$($contract.Label) control registration in $view"
+                    }
                 }
             }
         }
         finally {
             $root.Dispose()
+        }
+    }
+}
+
+function Invoke-BestEffortInstalledCleanup {
+    param([Parameter(Mandatory = $true)][string]$UninstallerPath)
+
+    if (-not (Test-Path -LiteralPath $UninstallerPath -PathType Leaf)) {
+        return
+    }
+
+    try {
+        $exitCode = Invoke-WaitingProcess -FilePath $UninstallerPath -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART"
+        )
+        if ($exitCode -ne 0) {
+            try {
+                Write-Warning "Best-effort uninstall cleanup exited with code $exitCode."
+            }
+            catch {
+                # Cleanup diagnostics are non-fatal by design.
+            }
+        }
+    }
+    catch {
+        $cleanupMessage = $_.Exception.Message
+        try {
+            Write-Warning "Best-effort uninstall cleanup failed: $cleanupMessage"
+        }
+        catch {
+            # Cleanup diagnostics are non-fatal by design.
         }
     }
 }
@@ -474,155 +1038,139 @@ $installerArguments = @(
     "/NORESTART",
     "/DIR=`"$installDirectory`""
 )
+$uninstaller = Join-Path $installDirectory "unins000.exe"
 
-$installProcess = Start-Process $resolvedInstaller -ArgumentList $installerArguments -Wait -PassThru
-if ($installProcess.ExitCode -ne 0) {
-    throw "Installer exited with code $($installProcess.ExitCode)."
-}
+try {
+    $installExitCode = Invoke-WaitingProcess `
+        -FilePath $resolvedInstaller `
+        -ArgumentList $installerArguments
+    if ($installExitCode -ne 0) {
+        throw "Installer exited with code $installExitCode."
+    }
 
-$assemblyPath = Join-Path $installDirectory "ExcelReportBuilder.AddIn.dll"
-$workerPath = Join-Path $installDirectory "worker\ExcelReportBuilder.Worker.exe"
-if (-not (Test-Path $assemblyPath -PathType Leaf)) {
-    throw "Installed add-in assembly was not found."
-}
-if (-not (Test-Path $workerPath -PathType Leaf)) {
-    throw "Installed worker executable was not found."
-}
+    $assemblyPath = Join-Path $installDirectory "ExcelReportBuilder.AddIn.dll"
+    $workerPath = Join-Path $installDirectory "worker\ExcelReportBuilder.Worker.exe"
+    if (-not (Test-Path -LiteralPath $assemblyPath -PathType Leaf)) {
+        throw "Installed add-in assembly was not found."
+    }
+    if (-not (Test-Path -LiteralPath $workerPath -PathType Leaf)) {
+        throw "Installed worker executable was not found."
+    }
 
-$expectedMachine = if ([Environment]::Is64BitOperatingSystem) { 0x8664 } else { 0x014C }
-$actualMachine = Get-PeMachine -Path $workerPath
-if ($actualMachine -ne $expectedMachine) {
-    throw ("Installer selected worker machine 0x{0:X4}; expected 0x{1:X4}." -f
-        $actualMachine, $expectedMachine)
-}
+    $expectedMachine = if ([Environment]::Is64BitOperatingSystem) { 0x8664 } else { 0x014C }
+    $actualMachine = Get-PeMachine -Path $workerPath
+    if ($actualMachine -ne $expectedMachine) {
+        throw ("Installer selected worker machine 0x{0:X4}; expected 0x{1:X4}." -f
+            $actualMachine, $expectedMachine)
+    }
 
-$appClsid = "{F953480C-A73C-4121-9E21-18676EC34CE8}"
-$paneClsid = "{A3F4E10D-0DD1-420E-8B6F-E0A654BBEA16}"
-$views = @([Microsoft.Win32.RegistryView]::Registry32)
-if ([Environment]::Is64BitOperatingSystem) {
-    $views = @(
-        [Microsoft.Win32.RegistryView]::Registry64,
-        [Microsoft.Win32.RegistryView]::Registry32
-    )
-}
+    $appClsid = "{F953480C-A73C-4121-9E21-18676EC34CE8}"
+    $paneClsid = "{A3F4E10D-0DD1-420E-8B6F-E0A654BBEA16}"
+    $views = @([Microsoft.Win32.RegistryView]::Registry32)
+    if ([Environment]::Is64BitOperatingSystem) {
+        $views = @(
+            [Microsoft.Win32.RegistryView]::Registry64,
+            [Microsoft.Win32.RegistryView]::Registry32
+        )
+    }
 
-foreach ($view in $views) {
-    $addin = $null
-    $server = $null
-    $pane = $null
-    $control = $null
-    $versionedServer = $null
-    $versionedPane = $null
-    $root = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
-        [Microsoft.Win32.RegistryHive]::CurrentUser,
-        $view)
+    Assert-InstalledPerUserRegistration `
+        -Views $views `
+        -AssemblyPath $assemblyPath `
+        -AppClsid $appClsid `
+        -PaneClsid $paneClsid
+
+    $activationSmoke = Join-Path $temporaryRoot (
+        "excel-report-builder-com-activation-" + [Guid]::NewGuid().ToString("N") + ".ps1")
+    Remove-PerUserComActivationKeys -Views $views
+    $activationError = $null
+    $activationScriptCleanupError = $null
     try {
-        $addin = $root.OpenSubKey("Software\Microsoft\Office\Excel\Addins\ExcelReportBuilder.AddIn")
-        if ($null -eq $addin -or $addin.GetValue("LoadBehavior") -ne 3) {
-            throw "Excel add-in registration is missing in $view."
-        }
-
-        $server = $root.OpenSubKey("Software\Classes\CLSID\$appClsid\InprocServer32")
-        $pane = $root.OpenSubKey("Software\Classes\CLSID\$paneClsid\InprocServer32")
-        if ($null -eq $server -or $null -eq $pane) {
-            throw "Managed COM registration is missing in $view."
-        }
-        if ([string]$server.GetValue("Class") -ne "ExcelReportBuilder.AddIn.Com.ExcelReportBuilderAddIn") {
-            throw "Excel add-in COM class is wrong in $view."
-        }
-        if ([string]$pane.GetValue("Class") -ne "ExcelReportBuilder.AddIn.Hosting.TaskPaneHost") {
-            throw "Task-pane COM class is wrong in $view."
-        }
-
-        foreach ($registeredCodeBase in @(
-            [string]$server.GetValue("CodeBase"),
-            [string]$pane.GetValue("CodeBase")
-        )) {
-            $codeBaseUri = [Uri]::new($registeredCodeBase, [UriKind]::Absolute)
-            if (-not $codeBaseUri.IsFile -or
-                -not [string]::Equals(
-                    [IO.Path]::GetFullPath($codeBaseUri.LocalPath),
-                    [IO.Path]::GetFullPath($assemblyPath),
-                    [StringComparison]::OrdinalIgnoreCase)) {
-                throw "Managed COM CodeBase is not a safe URL for the installed assembly in $view."
-            }
-            if ($registeredCodeBase.Contains("#") -or
-                -not $registeredCodeBase.Contains("%23") -or
-                -not $registeredCodeBase.Contains("%25")) {
-                throw "Managed COM CodeBase did not escape reserved path characters in $view."
-            }
-        }
-
-        $versionedServer = $server.OpenSubKey("0.1.0.0")
-        $versionedPane = $pane.OpenSubKey("0.1.0.0")
-        if ($null -eq $versionedServer -or $null -eq $versionedPane) {
-            throw "Versioned managed COM registration is missing in $view."
-        }
-
-        $control = $root.OpenSubKey("Software\Classes\CLSID\$paneClsid\Control")
-        if ($null -eq $control) {
-            throw "Task-pane ActiveX Control registration is missing in $view."
-        }
+        # GitHub-hosted Windows runners are elevated non-interactive services. In
+        # that context Windows ignores per-user COM classes. The registry checks
+        # above verify the installed HKCU contract; temporary machine registration
+        # exercises both real managed class factories and is removed immediately.
+        Invoke-ComActivationSmoke `
+            -ScriptPath $activationSmoke `
+            -AssemblyPath $assemblyPath
+    }
+    catch {
+        $activationError = $_
     }
     finally {
-        if ($null -ne $addin) { $addin.Dispose() }
-        if ($null -ne $versionedServer) { $versionedServer.Dispose() }
-        if ($null -ne $versionedPane) { $versionedPane.Dispose() }
-        if ($null -ne $server) { $server.Dispose() }
-        if ($null -ne $pane) { $pane.Dispose() }
-        if ($null -ne $control) { $control.Dispose() }
-        $root.Dispose()
+        try {
+            if (Test-Path -LiteralPath $activationSmoke) {
+                Remove-Item -LiteralPath $activationSmoke -Force
+            }
+        }
+        catch {
+            $activationScriptCleanupError = $_
+        }
     }
-}
-
-$activationSmoke = Join-Path $temporaryRoot (
-    "excel-report-builder-com-activation-" + [Guid]::NewGuid().ToString("N") + ".ps1")
-Remove-PerUserComActivationKeys -Views $views
-try {
-    # GitHub-hosted Windows runners are elevated non-interactive services. In
-    # that context Windows ignores per-user COM classes. The registry checks
-    # above verify the installed HKCU contract; temporary machine registration
-    # exercises both real managed class factories and is removed immediately.
-    Invoke-ComActivationSmoke `
-        -ScriptPath $activationSmoke `
-        -AssemblyPath $assemblyPath
-}
-finally {
-    if (Test-Path -LiteralPath $activationSmoke) {
-        Remove-Item -LiteralPath $activationSmoke -Force
+    if ($null -ne $activationError) {
+        if ($null -ne $activationScriptCleanupError) {
+            try {
+                Write-Warning (
+                    "Temporary activation-script cleanup also failed after the primary activation failure: " +
+                    $activationScriptCleanupError.Exception.Message)
+            }
+            catch {
+                # Diagnostics must never replace the primary activation error.
+            }
+        }
+        throw $activationError
     }
-}
+    if ($null -ne $activationScriptCleanupError) {
+        throw $activationScriptCleanupError
+    }
 
-$repairProcess = Start-Process $resolvedInstaller -ArgumentList $installerArguments -Wait -PassThru
-if ($repairProcess.ExitCode -ne 0) {
-    throw "Installer repair exited with code $($repairProcess.ExitCode)."
-}
-Assert-PerUserComActivationKeysPresent -Views $views
+    $repairExitCode = Invoke-WaitingProcess `
+        -FilePath $resolvedInstaller `
+        -ArgumentList $installerArguments
+    if ($repairExitCode -ne 0) {
+        throw "Installer repair exited with code $repairExitCode."
+    }
+    Assert-InstalledPerUserRegistration `
+        -Views $views `
+        -AssemblyPath $assemblyPath `
+        -AppClsid $appClsid `
+        -PaneClsid $paneClsid
 
-Invoke-WorkerHandshakeSmoke -WorkerPath $workerPath
+    Invoke-WorkerHandshakeSmoke -WorkerPath $workerPath
 
-$uninstaller = Join-Path $installDirectory "unins000.exe"
-if (-not (Test-Path $uninstaller -PathType Leaf)) {
-    throw "Installed uninstaller was not found."
-}
-$uninstallProcess = Start-Process $uninstaller -ArgumentList @(
-    "/VERYSILENT",
-    "/SUPPRESSMSGBOXES",
-    "/NORESTART"
-) -Wait -PassThru
-if ($uninstallProcess.ExitCode -ne 0) {
-    throw "Uninstaller exited with code $($uninstallProcess.ExitCode)."
-}
+    if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
+        throw "Installed uninstaller was not found."
+    }
+    $uninstallExitCode = Invoke-WaitingProcess -FilePath $uninstaller -ArgumentList @(
+        "/VERYSILENT",
+        "/SUPPRESSMSGBOXES",
+        "/NORESTART"
+    )
+    if ($uninstallExitCode -ne 0) {
+        throw "Uninstaller exited with code $uninstallExitCode."
+    }
 
-$cleanupDeadline = [DateTime]::UtcNow.AddSeconds(15)
-while ((Test-Path $installDirectory) -and [DateTime]::UtcNow -lt $cleanupDeadline) {
-    Start-Sleep -Milliseconds 250
-}
-if (Test-Path $installDirectory) {
-    throw "Uninstall left files in the installation directory."
-}
-foreach ($view in $views) {
-    Assert-RegistrationRemoved -View $view
-}
+    $cleanupDeadline = [DateTime]::UtcNow.AddSeconds(15)
+    while ((Test-Path -LiteralPath $installDirectory) -and
+        [DateTime]::UtcNow -lt $cleanupDeadline) {
+        Start-Sleep -Milliseconds 250
+    }
+    if (Test-Path -LiteralPath $installDirectory) {
+        throw "Uninstall left files in the installation directory."
+    }
+    foreach ($view in $views) {
+        Assert-RegistrationRemoved -View $view
+    }
 
-Write-Host "Per-user x86/x64 registration, real COM activation, worker handshake, and uninstall smoke tests passed."
+    Write-Host "Per-user x86/x64 registration, real COM activation, worker handshake, and uninstall smoke tests passed."
+}
+catch {
+    $primaryError = $_
+    try {
+        Invoke-BestEffortInstalledCleanup -UninstallerPath $uninstaller
+    }
+    catch {
+        # Best-effort cleanup must never replace the primary smoke-test error.
+    }
+    throw $primaryError
+}

@@ -53,6 +53,8 @@ $requiredXaml = @(
     'Text="Calculated metrics"',
     'Text="Report blocks"',
     'Text="Required checks"',
+    'AutomationProperties.Name="Current operation identity"',
+    'Header="Column" Binding="{Binding Name}" Width="*" MinWidth="96"',
     'Command="{Binding TogglePauseCommand}"',
     'Command="{Binding CancelCommand}"'
 )
