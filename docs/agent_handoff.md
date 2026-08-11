@@ -2,76 +2,75 @@
 
 ## Current Objective
 
-Publish the hardened `v0.1.0` unsigned prototype from `main`, verify the Windows
-installer and rendered task pane, then record the release evidence. Real Excel
-field validation remains separately authorized.
+The public `v0.1.0` unsigned prototype is released and independently verified.
+The next activity is a separately authorized field test in managed Excel,
+starting with generated synthetic data and managed draft sheets. No managed
+workstation or remote-desktop session was used for this release.
 
 ## Repo State
 
-- Path: repository root
 - Branch: `main`
-- Latest published commit before this release batch: `cde179b`
 - Public repo: `datap0nd/excel-report-builder`
-- Push status: the release-hardening batch is verified locally and not yet
-  pushed
+- Release source commit: `6e512ea3174eab5bb2d9b471ca4ee24aa14af3e5`
+- Tag: `v0.1.0`
+- Prerelease: <https://github.com/datap0nd/excel-report-builder/releases/tag/v0.1.0>
+- Tasks 1-6 in `plan.md` are complete. Field validation remains separate.
+- Main-branch protection is enabled after the final evidence commit passes its
+  required Windows and security checks.
 
-## Decisions Made
+## Delivered Product Boundary
 
-- The product remains a clean public implementation with generated synthetic
-  fixtures only.
-- The add-in mutates exact managed workbook objects only and never saves a
-  workbook.
-- Full-source transformations are independently evaluated for exact row and
-  additive-total reconciliation. The reference evaluator and generated M share
-  exact-case fields, bounded en-US conversions, null filter behavior, error
-  recovery, numeric period handling, and finite decimal arithmetic.
-- Wide normalization expands one explicit record per mapped cell, including
-  null cells, so projected and actual row counts cannot diverge.
-- Worksheet and Data Model PivotCaches use bounded backend-specific ownership
-  slots. Inactive managed backend objects can remain when Excel-owned caches
-  depend on them.
-- Registry-only ownership is not enough to mutate a live query, workbook name,
-  connection, or PivotTable. Exact content or source contracts must also match.
-- Publishing creates static values and formats. Final and rollback worksheets
-  contain neither formulas nor live PivotTables.
-- Every worker launch uses a random current-user pipe and one-time HMAC proof
-  before endpoint credentials, prompts, or workbook samples are sent.
-- Managed-workstation testing is out of scope until explicitly authorized.
+- The product is a clean public implementation using generated synthetic
+  fixtures and generic language only.
+- The native .NET Framework 4.8 COM add-in provides Data, Build, Chat, and Checks
+  surfaces in a WPF task pane with continuous typed progress and a 15-second
+  no-silence heartbeat.
+- Manual configuration and the guarded model worker produce the same versioned
+  report specification. The worker has no arbitrary code, formula, COM,
+  filesystem, save, publish, delete, email, or unrestricted network tool.
+- Long and wide period layouts, deterministic transformations, worksheet and
+  Data Model routing, native PivotTables, hidden-pivot dense blocks, typed
+  measures, validation, repair, publish approval, and rollback are implemented.
+- The source sheet remains unchanged. Autonomous work is limited to owned
+  managed drafts, and the add-in never saves the workbook automatically.
+- Endpoint credentials are protected for the current Windows user. Every worker
+  launch uses a random current-user pipe and one-time HMAC proof before any
+  credential, prompt, or workbook sample is sent.
 
-## Files Changed
+## Verification Evidence
 
-- `src/ExcelReportBuilder.Excel`: exact source reconciliation, backend routing,
-  PivotCache ownership, output auditing, and transactional static publishing.
-- `src/ExcelReportBuilder.AddIn`: exact saved-setup rebuilding, endpoint-scoped
-  credential state, multi-block manual projection, and task-pane binding fixes.
-- `src/ExcelReportBuilder.Agent` and `src/ExcelReportBuilder.Worker`: authenticated
-  one-use worker transport and endpoint credential scoping.
-- `.github/workflows/windows-build.yml`, `scripts`, and release docs: x86/x64
-  worker smoke tests, complete-payload SBOM validation, release ancestry, and
-  public-safety gates.
-- `tests`: adversarial coverage for every hardened contract.
+- Local Release build: zero warnings and zero errors.
+- Full synthetic suite: 484 passed, 0 failed, 0 skipped.
+- Final pre-tag Windows run: <https://github.com/datap0nd/excel-report-builder/actions/runs/31515081616>
+- Final security run: <https://github.com/datap0nd/excel-report-builder/actions/runs/31515081587>
+- Tagged build and release run: <https://github.com/datap0nd/excel-report-builder/actions/runs/31515470291>
+- Windows verified public safety, build, all tests, vulnerable dependencies,
+  complete-payload SBOM, COM contracts, WPF rendering, installer construction,
+  per-user x86/x64 registry values and value kinds, repair, real COM activation,
+  authenticated and fail-closed worker launches, uninstall, and cleanup.
+- The final 420 by 900 task-pane render was inspected. Source field names are
+  readable, and the operation identity uses constrained trimming at the minimum
+  pane width.
+- The public release manifest independently matched the downloaded installer
+  and SPDX SBOM.
+- Installer SHA-256:
+  `eee4c80f3b5acf03e1ad61c8bfffd0cc83685ce4aa47079526e13a317afd545b`
+- SBOM SHA-256:
+  `aba6a35a66147143883bbb0c647cd785582add7fddc3c8d69ed2ad774a09082a`
+- The installer and SBOM each passed SLSA provenance verification against the
+  tagged source commit and `.github/workflows/windows-build.yml`.
 
-## Commands And Checks
+## Remaining Boundary
 
-- Release solution build: passed with zero warnings.
-- Full synthetic test suite: 484 passed, 0 failed, 0 skipped.
-- NuGet transitive vulnerability scan: no vulnerable packages reported.
-- JSON Schema and XAML parsing: passed.
-- Public identifier, credential, private-artifact, em-dash, and diff checks:
-  passed locally; the complete PowerShell gate will run in Windows CI.
-- The pinned SBOM generator was checked locally against the Release add-in
-  payload and recognized every first-party assembly and required runtime
-  package under the names enforced by CI.
-- Windows build, COM activation, installer, task-pane preview, SBOM, checksum,
-  provenance, and tagged release: not yet run for this unpushed batch.
-
-## Open Questions
-
-- No code blocker is known. Windows CI remains the authoritative check for COM,
-  PowerShell, WPF rendering, Inno Setup, and installed-worker behavior.
+- The installer is intentionally unsigned, so Windows displays an
+  unknown-publisher warning.
+- A real Excel LTSC 2021 workbook session has not been exercised. That test must
+  begin with a small generated synthetic workbook. A real workbook requires a
+  separate explicit authorization and must remain confined to managed drafts.
+- No code or release blocker is known.
 
 ## Next Step
 
-Commit and push the scoped release-hardening batch to `origin/main`, then follow
-the Windows and security workflows through completion before creating the
-`v0.1.0` tag.
+Wait for explicit authorization to run the managed Excel field test. Do not use
+a remote-desktop session or inspect a real workbook merely because the public
+release is complete.

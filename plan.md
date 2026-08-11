@@ -16,9 +16,9 @@
 5. [x] Implement OpenAI-compatible model settings, the guarded local worker,
    schema-aware chat, validation-driven repair, checkpoints, cancellation, and
    final change reports.
-6. [ ] Complete public release verification and later user-authorized Excel
-   field validation. Packaging, accessibility contracts, diagnostics, and
-   security workflows are implemented; field validation remains separate.
+6. [x] Complete public release verification. User-authorized Excel field
+   validation remains a separate next activity and was not part of this
+   release.
 
 ## Completion Contract
 
