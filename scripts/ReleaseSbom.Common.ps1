@@ -18,7 +18,8 @@ function Get-RequiredSbomStringProperty {
 function ConvertTo-CanonicalReleaseRelativePath {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$Description
+        [Parameter(Mandatory = $true)][string]$Description,
+        [switch]$AllowSyftRootPrefix
     )
 
     if ([string]::IsNullOrWhiteSpace($Path)) {
@@ -26,8 +27,20 @@ function ConvertTo-CanonicalReleaseRelativePath {
     }
 
     $normalized = $Path.Replace('\', '/')
-    if ([IO.Path]::IsPathRooted($Path) -or
+    if ($AllowSyftRootPrefix -and
+        $normalized.StartsWith('/', [StringComparison]::Ordinal) -and
+        -not $normalized.StartsWith('//', [StringComparison]::Ordinal)) {
+        # Syft 1.42.3 prefixes Windows directory-scan entries with one slash.
+        # Treat that marker as the scan root, never as a filesystem root.
+        $normalized = $normalized.Substring(1)
+    }
+    elseif ([IO.Path]::IsPathRooted($Path) -or
         $normalized.StartsWith('/', [StringComparison]::Ordinal) -or
+        $normalized -match '^[A-Za-z]:') {
+        throw "$Description must be a root-relative path: $Path"
+    }
+
+    if ([string]::IsNullOrWhiteSpace($normalized) -or
         $normalized -match '^[A-Za-z]:') {
         throw "$Description must be a root-relative path: $Path"
     }
@@ -142,7 +155,8 @@ function Get-ReleaseSbomFileInventory {
 
         $canonicalPath = ConvertTo-CanonicalReleaseRelativePath `
             -Path $fileName `
-            -Description "Release SBOM fileName"
+            -Description "Release SBOM fileName" `
+            -AllowSyftRootPrefix
         if ($byPath.ContainsKey($canonicalPath)) {
             throw "The release SBOM contains a duplicate file path: $canonicalPath"
         }
