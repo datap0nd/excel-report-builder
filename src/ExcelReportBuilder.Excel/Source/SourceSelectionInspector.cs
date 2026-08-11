@@ -45,9 +45,29 @@ namespace ExcelReportBuilder.Excel.Source
                 throw new InvalidOperationException("Select one rectangular table or range.");
             }
 
-            var rowCount = Convert.ToInt64(selection.Rows.Count, CultureInfo.InvariantCulture);
+            object? tableObject = SourceSelectionContract.GetExactContainingTableOrThrow(selectionObject);
+            var selectedRowCount = Convert.ToInt64(selection.Rows.Count, CultureInfo.InvariantCulture);
             var columnCount = Convert.ToInt32(selection.Columns.Count, CultureInfo.InvariantCulture);
-            if (rowCount < 2 || columnCount < 1)
+            long dataRowCount;
+            if (tableObject == null)
+            {
+                dataRowCount = selectedRowCount - 1L;
+            }
+            else
+            {
+                dynamic table = tableObject;
+                dataRowCount = Convert.ToInt64(table.ListRows.Count, CultureInfo.InvariantCulture);
+                var tableColumnCount = Convert.ToInt32(
+                    table.ListColumns.Count,
+                    CultureInfo.InvariantCulture);
+                if (tableColumnCount != columnCount)
+                {
+                    throw new InvalidOperationException(
+                        "The selected table columns changed during source inspection.");
+                }
+            }
+
+            if (dataRowCount < 1 || columnCount < 1)
             {
                 throw new InvalidOperationException("The selected source must contain one header row and at least one data row.");
             }
@@ -57,7 +77,7 @@ namespace ExcelReportBuilder.Excel.Source
                 throw new InvalidOperationException("The selected source exceeds Excel's column capacity.");
             }
 
-            var boundedRows = (int)Math.Min(rowCount, maximumSampleRows + 1L);
+            var boundedRows = checked((int)Math.Min(dataRowCount, maximumSampleRows) + 1);
             dynamic sampleRange = selection.Resize[boundedRows, columnCount];
             var values = sampleRange.Value2;
             var headers = new List<string>(columnCount);
@@ -65,7 +85,7 @@ namespace ExcelReportBuilder.Excel.Source
 
             for (var column = 1; column <= columnCount; column++)
             {
-                var header = Convert.ToString(Read(values, 1, column), CultureInfo.InvariantCulture)?.Trim();
+                var header = Convert.ToString(Read(values, 1, column), CultureInfo.InvariantCulture);
                 if (string.IsNullOrWhiteSpace(header))
                 {
                     throw new InvalidOperationException("Every selected source column must have a non-blank header.");
@@ -90,11 +110,18 @@ namespace ExcelReportBuilder.Excel.Source
                 rows.Add(resultRow);
             }
 
-            var objectName = TryGetTableName(selection) ?? CreateRangeName(selection);
+            var objectName = tableObject == null
+                ? CreateRangeName(selection)
+                : Convert.ToString(((dynamic)tableObject).Name, CultureInfo.InvariantCulture);
+            if (string.IsNullOrWhiteSpace(objectName))
+            {
+                throw new InvalidOperationException("Excel did not expose a stable name for the selected source.");
+            }
+
             return new SourceSelectionSnapshot
             {
-                WorkbookObjectName = objectName,
-                RowCount = rowCount - 1,
+                WorkbookObjectName = objectName!,
+                RowCount = dataRowCount,
                 ColumnCount = columnCount,
                 Headers = headers,
                 SampleRows = rows
@@ -109,19 +136,6 @@ namespace ExcelReportBuilder.Excel.Source
             }
 
             return row == 1 && column == 1 ? values : null;
-        }
-
-        private static string? TryGetTableName(dynamic selection)
-        {
-            try
-            {
-                dynamic listObject = selection.ListObject;
-                return listObject == null ? null : Convert.ToString(listObject.Name, CultureInfo.InvariantCulture);
-            }
-            catch (Exception)
-            {
-                return null;
-            }
         }
 
         private static string CreateRangeName(dynamic selection)

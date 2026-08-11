@@ -41,6 +41,27 @@ public sealed class ExcelExecutionPreflightTests
     }
 
     [Fact]
+    public void Rejects_an_unknown_canonical_data_route()
+    {
+        var (specification, plan) = CreateDirectPlan(ReportOutputMode.StandardMatrix);
+        plan.Source.Route = (SourceLoadRoute)999;
+
+        Assert.Throws<NotSupportedException>(() =>
+            ExcelExecutionPreflight.DemandSupported(specification, plan));
+    }
+
+    [Fact]
+    public void Rejects_a_pivot_backend_that_does_not_match_the_canonical_data()
+    {
+        var (specification, plan) = CreateDirectPlan(ReportOutputMode.StandardMatrix);
+        plan.Source.Route = SourceLoadRoute.DataModel;
+        plan.Blocks[0].Pivot.UseDataModel = false;
+
+        Assert.Throws<NotSupportedException>(() =>
+            ExcelExecutionPreflight.DemandSupported(specification, plan));
+    }
+
+    [Fact]
     public void Rejects_check_measure_that_is_not_rendered_by_any_block()
     {
         var (specification, plan) = CreateDirectPlan(ReportOutputMode.DenseGrid);
@@ -246,6 +267,21 @@ public sealed class ExcelExecutionPreflightTests
     }
 
     [Fact]
+    public void Rejects_dense_hierarchy_that_exceeds_independent_pivot_read_depth()
+    {
+        var (specification, plan) = CreateDirectPlan(ReportOutputMode.DenseGrid);
+        for (var index = 0; index <= ExcelReportExecutor.MaximumIndependentPivotFilterPairs; index++)
+        {
+            plan.Blocks[0].Pivot.Rows.Add(new PivotFieldPlan { Field = "Field" + index });
+        }
+
+        var exception = Assert.Throws<NotSupportedException>(() =>
+            ExcelExecutionPreflight.DemandSupported(specification, plan));
+
+        Assert.Contains("independently validated", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Rejects_distinct_count_for_worksheet_pivot()
     {
         var (specification, plan) = CreateDirectPlan(ReportOutputMode.StandardMatrix);
@@ -260,6 +296,7 @@ public sealed class ExcelExecutionPreflightTests
     public void Accepts_distinct_count_for_data_model_pivot()
     {
         var (specification, plan) = CreateDirectPlan(ReportOutputMode.StandardMatrix);
+        plan.Source.Route = SourceLoadRoute.DataModel;
         plan.Blocks[0].Pivot.Values[0].AggregateComponents[0].Function = AggregateFunction.DistinctCount;
         plan.Blocks[0].Pivot.UseDataModel = true;
 

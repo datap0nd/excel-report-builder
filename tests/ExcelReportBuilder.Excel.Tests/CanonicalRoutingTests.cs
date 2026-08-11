@@ -19,6 +19,25 @@ public sealed class CanonicalRoutingTests
     }
 
     [Fact]
+    public void Required_data_model_route_is_preserved_below_the_worksheet_limit()
+    {
+        var router = new CanonicalDestinationRouter();
+
+        Assert.Equal(
+            CanonicalBackend.DataModel,
+            router.ResolveRequired(12, CanonicalBackend.DataModel));
+    }
+
+    [Fact]
+    public void Required_worksheet_route_cannot_override_the_size_limit()
+    {
+        var router = new CanonicalDestinationRouter();
+
+        Assert.Throws<InvalidOperationException>(() =>
+            router.ResolveRequired(1_048_576, CanonicalBackend.Worksheet));
+    }
+
+    [Fact]
     public void Restricted_query_policy_accepts_current_workbook_only()
     {
         var policy = new RestrictedQueryFormulaPolicy();

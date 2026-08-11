@@ -33,6 +33,13 @@ namespace ExcelReportBuilder.Excel.Validation
 
         public long ProjectedNormalizedRows { get; set; }
 
+        /// <summary>
+        /// Exact final row count produced by independently applying the closed
+        /// typed transform grammar to the complete current source. Required
+        /// whenever planning requires independent post-transform evidence.
+        /// </summary>
+        public long? ExpectedPostTransformNormalizedRows { get; set; }
+
         public long ActualNormalizedRows { get; set; }
 
         public IReadOnlyDictionary<string, decimal> SourceTotals { get; set; } =
@@ -202,21 +209,32 @@ namespace ExcelReportBuilder.Excel.Validation
 
         private static CheckResult RowCountResult(BuildCheckPlan check, ReconciliationSnapshot snapshot)
         {
-            var passed = check.RowCountExpectation == RowCountExpectation.AtMostProjection
-                ? snapshot.ActualNormalizedRows <= snapshot.ProjectedNormalizedRows
-                : snapshot.ProjectedNormalizedRows == snapshot.ActualNormalizedRows;
+            var requiresIndependentCount = check.RowCountExpectation ==
+                RowCountExpectation.ExactPostTransformCount ||
+                check.RowCountExpectation == RowCountExpectation.AtMostProjection;
+            if (requiresIndependentCount && !snapshot.ExpectedPostTransformNormalizedRows.HasValue)
+            {
+                return Unavailable(
+                    check.Id,
+                    "The exact independently audited post-transform row count is unavailable.");
+            }
+
+            var expected = requiresIndependentCount
+                ? snapshot.ExpectedPostTransformNormalizedRows!.Value
+                : snapshot.ProjectedNormalizedRows;
+            var passed = expected == snapshot.ActualNormalizedRows;
             return new CheckResult
             {
                 CheckId = check.Id,
                 Outcome = passed ? CheckOutcome.Passed : CheckOutcome.Failed,
                 Message = passed
-                    ? check.RowCountExpectation == RowCountExpectation.AtMostProjection
-                        ? "Normalized row count is within the projection after explicit row-removal transforms."
+                    ? requiresIndependentCount
+                        ? "Normalized row count matches the independently audited post-transform count."
                         : "Normalized row count matches the projection."
-                    : check.RowCountExpectation == RowCountExpectation.AtMostProjection
-                        ? "Normalized row count exceeds the maximum projection."
+                    : requiresIndependentCount
+                        ? "Normalized row count differs from the independently audited post-transform count."
                         : "Normalized row count differs from the projection.",
-                Expected = snapshot.ProjectedNormalizedRows,
+                Expected = expected,
                 Actual = snapshot.ActualNormalizedRows
             };
         }

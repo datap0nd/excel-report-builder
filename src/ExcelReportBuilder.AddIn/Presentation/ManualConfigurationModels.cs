@@ -4,7 +4,7 @@ using ExcelReportBuilder.AddIn.Host;
 
 namespace ExcelReportBuilder.AddIn.Presentation
 {
-    public sealed class ManualTransformRule : ObservableObject
+    public sealed class ManualTransformRule : ManualEditableObject
     {
         private string _operation = "Trim text";
         private string _column = string.Empty;
@@ -16,6 +16,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _operation;
             set
             {
+                if (!CanEdit) return;
                 if (SetProperty(ref _operation, value ?? string.Empty)) RaisePropertyChanged(nameof(Summary));
             }
         }
@@ -25,6 +26,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _column;
             set
             {
+                if (!CanEdit) return;
                 if (SetProperty(ref _column, value ?? string.Empty)) RaisePropertyChanged(nameof(Summary));
             }
         }
@@ -32,13 +34,19 @@ namespace ExcelReportBuilder.AddIn.Presentation
         public string OutputColumn
         {
             get => _outputColumn;
-            set => SetProperty(ref _outputColumn, value ?? string.Empty);
+            set
+            {
+                if (CanEdit) SetProperty(ref _outputColumn, value ?? string.Empty);
+            }
         }
 
         public string Details
         {
             get => _details;
-            set => SetProperty(ref _details, value ?? string.Empty);
+            set
+            {
+                if (CanEdit) SetProperty(ref _details, value ?? string.Empty);
+            }
         }
 
         public string Summary => string.IsNullOrWhiteSpace(Column)
@@ -51,7 +59,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
         }
     }
 
-    public sealed class ManualCalculatedMetricRule : ObservableObject
+    public sealed class ManualCalculatedMetricRule : ManualEditableObject
     {
         private string _label = "Calculated metric";
         private string _kind = "Ratio";
@@ -65,6 +73,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _label;
             set
             {
+                if (!CanEdit) return;
                 if (SetProperty(ref _label, value ?? string.Empty)) RaisePropertyChanged(nameof(Summary));
             }
         }
@@ -74,6 +83,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _kind;
             set
             {
+                if (!CanEdit) return;
                 if (SetProperty(ref _kind, value ?? string.Empty)) RaisePropertyChanged(nameof(Summary));
             }
         }
@@ -81,25 +91,37 @@ namespace ExcelReportBuilder.AddIn.Presentation
         public string Primary
         {
             get => _primary;
-            set => SetProperty(ref _primary, value ?? string.Empty);
+            set
+            {
+                if (CanEdit) SetProperty(ref _primary, value ?? string.Empty);
+            }
         }
 
         public string Secondary
         {
             get => _secondary;
-            set => SetProperty(ref _secondary, value ?? string.Empty);
+            set
+            {
+                if (CanEdit) SetProperty(ref _secondary, value ?? string.Empty);
+            }
         }
 
         public string Details
         {
             get => _details;
-            set => SetProperty(ref _details, value ?? string.Empty);
+            set
+            {
+                if (CanEdit) SetProperty(ref _details, value ?? string.Empty);
+            }
         }
 
         public string NumberFormat
         {
             get => _numberFormat;
-            set => SetProperty(ref _numberFormat, value ?? "General");
+            set
+            {
+                if (CanEdit) SetProperty(ref _numberFormat, value ?? "General");
+            }
         }
 
         public string Summary => Label + " · " + Kind;
@@ -116,7 +138,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
         }
     }
 
-    public sealed class ManualReportBlockRule : ObservableObject
+    public sealed class ManualReportBlockRule : ManualEditableObject
     {
         private const int MaximumOwnedRows = 1048576;
         private const int MaximumOwnedColumns = 16384;
@@ -128,20 +150,34 @@ namespace ExcelReportBuilder.AddIn.Presentation
         private int _ownedRows = 500;
         private int _ownedColumns = 64;
 
-        public ManualReportBlockRule(string? stableId = null)
+        public ManualReportBlockRule(
+            string? stableId = null,
+            string? canonicalBlockId = null,
+            string? canonicalOwnershipId = null)
         {
             StableId = string.IsNullOrWhiteSpace(stableId)
                 ? "report_block_" + Guid.NewGuid().ToString("N")
                 : stableId!.Trim();
+            CanonicalBlockId = string.IsNullOrWhiteSpace(canonicalBlockId)
+                ? null
+                : canonicalBlockId;
+            CanonicalOwnershipId = string.IsNullOrWhiteSpace(canonicalOwnershipId)
+                ? null
+                : canonicalOwnershipId;
         }
 
         public string StableId { get; }
+
+        public string? CanonicalBlockId { get; }
+
+        public string? CanonicalOwnershipId { get; }
 
         public string Title
         {
             get => _title;
             set
             {
+                if (!CanEdit) return;
                 if (SetProperty(ref _title, value ?? string.Empty)) RaisePropertyChanged(nameof(Summary));
             }
         }
@@ -151,6 +187,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _worksheetName;
             set
             {
+                if (!CanEdit) return;
                 if (SetProperty(ref _worksheetName, value ?? string.Empty)) RaisePropertyChanged(nameof(Summary));
             }
         }
@@ -160,6 +197,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _anchorCell;
             set
             {
+                if (!CanEdit) return;
                 if (SetProperty(ref _anchorCell, value ?? string.Empty)) RaisePropertyChanged(nameof(Summary));
             }
         }
@@ -167,7 +205,10 @@ namespace ExcelReportBuilder.AddIn.Presentation
         public string OutputStyle
         {
             get => _outputStyle;
-            set => SetProperty(ref _outputStyle, value ?? "Dense management block");
+            set
+            {
+                if (CanEdit) SetProperty(ref _outputStyle, value ?? "Dense management block");
+            }
         }
 
         public int OwnedRows
@@ -175,6 +216,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _ownedRows;
             set
             {
+                if (!CanEdit) return;
                 int bounded = Math.Max(1, Math.Min(MaximumOwnedRows, value));
                 if (SetProperty(ref _ownedRows, bounded)) RaisePropertyChanged(nameof(Summary));
             }
@@ -185,6 +227,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _ownedColumns;
             set
             {
+                if (!CanEdit) return;
                 int bounded = Math.Max(1, Math.Min(MaximumOwnedColumns, value));
                 if (SetProperty(ref _ownedColumns, bounded)) RaisePropertyChanged(nameof(Summary));
             }
@@ -202,11 +245,13 @@ namespace ExcelReportBuilder.AddIn.Presentation
                 OutputStyle,
                 StableId,
                 OwnedRows,
-                OwnedColumns);
+                OwnedColumns,
+                CanonicalBlockId,
+                CanonicalOwnershipId);
         }
     }
 
-    public sealed class ManualCheckRule : ObservableObject
+    public sealed class ManualCheckRule : ManualEditableObject
     {
         private string _kind = "Total preservation";
         private string _metric = string.Empty;
@@ -218,6 +263,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _kind;
             set
             {
+                if (!CanEdit) return;
                 if (SetProperty(ref _kind, value ?? string.Empty)) RaisePropertyChanged(nameof(Summary));
             }
         }
@@ -227,6 +273,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _metric;
             set
             {
+                if (!CanEdit) return;
                 if (SetProperty(ref _metric, value ?? string.Empty)) RaisePropertyChanged(nameof(Summary));
             }
         }
@@ -234,13 +281,19 @@ namespace ExcelReportBuilder.AddIn.Presentation
         public string ComparedMetric
         {
             get => _comparedMetric;
-            set => SetProperty(ref _comparedMetric, value ?? string.Empty);
+            set
+            {
+                if (CanEdit) SetProperty(ref _comparedMetric, value ?? string.Empty);
+            }
         }
 
         public string ToleranceText
         {
             get => _toleranceText;
-            set => SetProperty(ref _toleranceText, value ?? string.Empty);
+            set
+            {
+                if (CanEdit) SetProperty(ref _toleranceText, value ?? string.Empty);
+            }
         }
 
         public string Summary => Kind + (string.IsNullOrWhiteSpace(Metric) ? string.Empty : " · " + Metric);

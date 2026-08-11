@@ -44,6 +44,32 @@ public sealed class DenseReportRendererTests
     }
 
     [Fact]
+    public void Rejects_a_managed_formula_without_an_independent_expectation()
+    {
+        var plan = new DenseGridPlan
+        {
+            AnchorCell = "A1",
+            OwnedRowCount = 1,
+            OwnedColumnCount = 1,
+            Cells =
+            {
+                new DenseCellWrite
+                {
+                    RelativeRow = 0,
+                    RelativeColumn = 0,
+                    Kind = DenseCellValueKind.Formula,
+                    Formula = SafeFormulaFactory.FromTypedMeasure("=1")
+                }
+            }
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            DenseReportRenderer.ValidatePlan(plan));
+
+        Assert.Contains("independent typed result", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Clears_only_the_owned_block_range_before_an_idempotent_render()
     {
         var identity = new ManagedObjectIdentity(

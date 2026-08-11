@@ -57,6 +57,12 @@ namespace ExcelReportBuilder.Core.Planning
     public enum RowCountExpectation
     {
         ExactProjection,
+        ExactPostTransformCount,
+        /// <summary>
+        /// Retained only so an older in-memory plan fails closed instead of
+        /// silently changing meaning. Reconciliation requires the same exact
+        /// independent post-transform count as ExactPostTransformCount.
+        /// </summary>
         AtMostProjection
     }
 

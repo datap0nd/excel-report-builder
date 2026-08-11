@@ -40,7 +40,8 @@ public sealed class ProtocolTests
     public void Deserialize_RejectsMissingMessageType()
     {
         var bytes = Encoding.UTF8.GetBytes(
-            "{\"protocolVersion\":\"1.0\",\"correlationId\":\"c1\",\"payload\":{}}");
+            "{\"protocolVersion\":\"" + AgentProtocol.Version +
+            "\",\"correlationId\":\"c1\",\"payload\":{}}");
 
         Assert.Throws<AgentProtocolException>(() => AgentProtocol.Deserialize(bytes));
     }
@@ -49,7 +50,8 @@ public sealed class ProtocolTests
     public void Deserialize_RejectsNumericMessageType()
     {
         var bytes = Encoding.UTF8.GetBytes(
-            "{\"protocolVersion\":\"1.0\",\"messageType\":1,\"correlationId\":\"c1\",\"payload\":{}}");
+            "{\"protocolVersion\":\"" + AgentProtocol.Version +
+            "\",\"messageType\":1,\"correlationId\":\"c1\",\"payload\":{}}");
 
         Assert.Throws<AgentProtocolException>(() => AgentProtocol.Deserialize(bytes));
     }
@@ -78,6 +80,27 @@ public sealed class ProtocolTests
 
         Assert.Equal("checks-1", restored.ToolCallId);
         Assert.Single(restored.CheckFailures);
+    }
+
+    [Fact]
+    public void Protocol_RoundTripsAuthenticatedHello()
+    {
+        var envelope = AgentProtocol.Create(
+            AgentMessageType.Hello,
+            "hello-1",
+            new HelloRequest
+            {
+                ClientName = "test-client",
+                SupportedProtocolVersions = { AgentProtocol.Version },
+                ClientNonce = "nonce-value"
+            });
+
+        var restored = AgentProtocol.ReadPayload<HelloRequest>(
+            AgentProtocol.Deserialize(AgentProtocol.Serialize(envelope)));
+
+        Assert.Equal("test-client", restored.ClientName);
+        Assert.Equal(AgentProtocol.Version, Assert.Single(restored.SupportedProtocolVersions));
+        Assert.Equal("nonce-value", restored.ClientNonce);
     }
 
     [Fact]

@@ -33,6 +33,10 @@ namespace ExcelReportBuilder.Excel.Execution
     {
         public string PivotTableName { get; set; } = string.Empty;
 
+        public string PivotCacheName { get; set; } = string.Empty;
+
+        public int PivotCacheIndex { get; set; }
+
         public string WorksheetName { get; set; } = string.Empty;
 
         public string AnchorCell { get; set; } = string.Empty;
@@ -93,25 +97,155 @@ namespace ExcelReportBuilder.Excel.Execution
                     ManagedObjectKind.PivotTable)
                 : ManagedOutputIdentity.Draft(reportId, block.WorksheetName);
             ownershipGuard.DemandOwned(destinationWorksheet, destinationIdentity);
-            var identity = new ManagedObjectIdentity(reportId, block.OwnershipId, ManagedObjectKind.PivotTable);
-            RemoveExistingOwnedPivot(workbook, destinationWorksheet, block.Pivot.ManagedPivotName, identity);
+            var identity = new ManagedObjectIdentity(
+                reportId,
+                block.OwnershipId,
+                ManagedObjectKind.PivotTable);
+            var cacheSlot = ManagedPivotCacheSlot.For(
+                reportId,
+                block.OwnershipId,
+                block.Pivot.ManagedCacheName,
+                source.Backend);
+            var cacheSlots = new[]
+            {
+                ManagedPivotCacheSlot.For(
+                    reportId,
+                    block.OwnershipId,
+                    block.Pivot.ManagedCacheName,
+                    CanonicalBackend.Worksheet),
+                ManagedPivotCacheSlot.For(
+                    reportId,
+                    block.OwnershipId,
+                    block.Pivot.ManagedCacheName,
+                    CanonicalBackend.DataModel)
+            };
+            var cacheIdentity = cacheSlot.Identity;
+            var records = registry.Load((object)workbook);
+            var sourceContract = PivotCacheSourceContract.From(source);
+            dynamic? existingPivot = FindExistingOwnedPivot(
+                workbook,
+                destinationWorksheet,
+                block.Pivot.ManagedPivotName,
+                identity,
+                cacheSlots,
+                records);
+            records = registry.Load((object)workbook);
+            dynamic? candidateCache = null;
+            PivotCacheSnapshot? candidateSnapshot = null;
+            var registrations = records.Where(record =>
+                string.Equals(record.ReportId, cacheIdentity.ReportId, StringComparison.Ordinal) &&
+                string.Equals(record.ObjectId, cacheIdentity.ObjectId, StringComparison.Ordinal) &&
+                record.Kind == cacheIdentity.Kind).ToList();
+            var candidateIsExistingManagedPivotCache = false;
+            if (registrations.Count == 1 &&
+                int.TryParse(
+                    registrations[0].Locator,
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out var registeredIndex) &&
+                registeredIndex > 0)
+            {
+                candidateCache = TryGetPivotCache(workbook, registeredIndex);
+                if (candidateCache != null)
+                {
+                    candidateSnapshot = ReadPivotCacheSnapshot(workbook, candidateCache);
+                    candidateIsExistingManagedPivotCache = existingPivot != null &&
+                        Convert.ToInt32(
+                            ((dynamic)existingPivot!).CacheIndex,
+                            CultureInfo.InvariantCulture) == candidateSnapshot.Index;
+                }
+            }
+            else if (registrations.Count == 0 && existingPivot != null)
+            {
+                candidateCache = ((dynamic)existingPivot!).PivotCache();
+                candidateSnapshot = ReadPivotCacheSnapshot(workbook, candidateCache);
+                candidateIsExistingManagedPivotCache = true;
+            }
+
+            var cachePlan = ManagedPivotCachePolicy.Plan(
+                records,
+                cacheIdentity,
+                cacheSlot.RegistryName,
+                sourceContract,
+                candidateIsExistingManagedPivotCache,
+                candidateSnapshot);
+            if (existingPivot != null)
+            {
+                existingPivot.TableRange2.Clear();
+            }
+
             ClearOwnedDestination(destinationWorksheet, destinationCell, block);
 
             progressSink.Report(new ExcelProgress
             {
                 Stage = ExcelBuildStage.BuildingPivots,
-                Operation = "Creating native PivotTable " + block.Pivot.ManagedPivotName + ".",
+                Operation = (cachePlan.Action == ManagedPivotCacheAction.Reuse ||
+                             cachePlan.Action == ManagedPivotCacheAction.ReuseAndRegister
+                        ? "Reusing managed PivotCache " + block.Pivot.ManagedCacheName +
+                          " and rebuilding PivotTable " + block.Pivot.ManagedPivotName + "."
+                        : "Creating managed PivotCache " + block.Pivot.ManagedCacheName +
+                          " and PivotTable " + block.Pivot.ManagedPivotName + "."),
                 ManagedObject = block.Pivot.ManagedPivotName,
                 ProjectedRows = source.ProjectedRows
             });
 
-            dynamic sourceData = source.Backend == CanonicalBackend.Worksheet
-                ? (dynamic)source.TableOrConnectionName
-                : workbook.Connections.Item(source.TableOrConnectionName);
-            var sourceType = source.Backend == CanonicalBackend.Worksheet ? SourceDatabase : SourceExternal;
-            dynamic cache = workbook.PivotCaches().Create(sourceType, sourceData, PivotVersion15);
+            dynamic cache;
+            if (cachePlan.Action == ManagedPivotCacheAction.Reuse ||
+                cachePlan.Action == ManagedPivotCacheAction.ReuseAndRegister)
+            {
+                cache = candidateCache ?? throw new InvalidOperationException(
+                    "The validated managed PivotCache reuse plan has no cache object.");
+            }
+            else
+            {
+                if (cachePlan.Action == ManagedPivotCacheAction.RetireAndCreate)
+                {
+                    registry.Remove((object)workbook, new[] { cacheIdentity });
+                }
+
+                dynamic sourceData = source.Backend == CanonicalBackend.Worksheet
+                    ? (dynamic)source.TableOrConnectionName
+                    : workbook.Connections.Item(source.TableOrConnectionName);
+                var sourceType = source.Backend == CanonicalBackend.Worksheet
+                    ? SourceDatabase
+                    : SourceExternal;
+                cache = workbook.PivotCaches().Create(sourceType, sourceData, PivotVersion15);
+            }
+
+            if (cachePlan.Action == ManagedPivotCacheAction.Reuse ||
+                cachePlan.Action == ManagedPivotCacheAction.ReuseAndRegister)
+            {
+                progressSink.Report(new ExcelProgress
+                {
+                    Stage = ExcelBuildStage.BuildingPivots,
+                    Operation = "Refreshing the exact managed PivotCache before rebuilding its PivotTable.",
+                    ManagedObject = block.Pivot.ManagedCacheName,
+                    ProjectedRows = source.ProjectedRows
+                });
+                cache.Refresh();
+            }
+
+            var cacheSnapshot = ReadPivotCacheSnapshot(workbook, cache);
+            if (!sourceContract.Matches(cacheSnapshot))
+            {
+                throw new InvalidOperationException(
+                    "Excel created or returned a PivotCache that does not match the validated source contract.");
+            }
+
+            registry.Register(
+                workbook,
+                cacheIdentity,
+                cacheSlot.RegistryName,
+                cacheSnapshot.Index.ToString(CultureInfo.InvariantCulture),
+                sourceContract.Serialized);
             dynamic destination = destinationWorksheet.Range[destinationCell];
             dynamic pivot = cache.CreatePivotTable(destination, block.Pivot.ManagedPivotName);
+            registry.Register(
+                workbook,
+                identity,
+                block.Pivot.ManagedPivotName,
+                cacheSnapshot.Index.ToString(CultureInfo.InvariantCulture),
+                sourceContract.Serialized);
             pivot.ManualUpdate = true;
 
             try
@@ -167,10 +301,11 @@ namespace ExcelReportBuilder.Excel.Execution
                     throw;
                 }
 
-                registry.Register(workbook, identity, block.Pivot.ManagedPivotName);
                 return new PivotBuildResult
                 {
                     PivotTableName = block.Pivot.ManagedPivotName,
+                    PivotCacheName = block.Pivot.ManagedCacheName,
+                    PivotCacheIndex = cacheSnapshot.Index,
                     WorksheetName = Convert.ToString(destinationWorksheet.Name, CultureInfo.InvariantCulture) ?? string.Empty,
                     AnchorCell = destinationCell,
                     DataFields = dataFields
@@ -690,32 +825,403 @@ namespace ExcelReportBuilder.Excel.Execution
             throw new InvalidOperationException("A required Data Model PivotField could not be activated.");
         }
 
-        private void RemoveExistingOwnedPivot(
+        private dynamic? FindExistingOwnedPivot(
             dynamic workbook,
             dynamic worksheet,
             string pivotName,
-            ManagedObjectIdentity identity)
+            ManagedObjectIdentity identity,
+            IReadOnlyList<ManagedPivotCacheSlot> cacheSlots,
+            IReadOnlyList<ManagedObjectRecord> records)
         {
-            dynamic? pivot = null;
+            var registrations = records.Where(record =>
+                SameIdentity(record, identity)).ToList();
+            if (registrations.Count > 1)
+            {
+                throw new InvalidOperationException(
+                    "More than one ownership record claims the managed PivotTable identity.");
+            }
+
+            if (records.Any(record =>
+                    record.Kind == ManagedObjectKind.PivotTable &&
+                    !SameIdentity(record, identity) &&
+                    string.Equals(record.ExcelName, pivotName, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException(
+                    "The requested managed PivotTable name is already owned by another object.");
+            }
+
+            var registration = registrations.SingleOrDefault();
+            dynamic? pivot = TryGetPivotTable(worksheet, pivotName);
+            if (pivot == null)
+            {
+                if (registration != null)
+                {
+                    dynamic? differentlyNamed = TryGetPivotTable(
+                        worksheet,
+                        registration.ExcelName);
+                    if (differentlyNamed != null)
+                    {
+                        throw new InvalidOperationException(
+                            "The managed PivotTable identity is registered under a different live name.");
+                    }
+
+                    registry.Remove((object)workbook, new[] { identity });
+                }
+
+                return null;
+            }
+
+            if (registration == null)
+            {
+                throw new InvalidOperationException(
+                    "A PivotTable with the requested name exists but is unmanaged.");
+            }
+
+            var livePivotCacheIndex = Convert.ToInt32(
+                pivot.CacheIndex,
+                CultureInfo.InvariantCulture);
+            RegisteredPivotCacheBinding binding = ResolveExactLivePivotCacheBinding(
+                records,
+                cacheSlots,
+                livePivotCacheIndex);
+
+            dynamic? cache = TryGetPivotCache(workbook, livePivotCacheIndex);
+            if (cache == null)
+            {
+                throw new InvalidOperationException(
+                    "The live managed PivotTable's registered PivotCache cannot be located.");
+            }
+
+            var cacheSnapshot = ReadPivotCacheSnapshot(workbook, cache);
+            DemandExactExistingPivotContract(
+                registration,
+                pivotName,
+                binding.Registration,
+                binding.Slot,
+                livePivotCacheIndex,
+                cacheSnapshot);
+            return pivot;
+        }
+
+        internal static RegisteredPivotCacheBinding ResolveExactLivePivotCacheBinding(
+            IReadOnlyList<ManagedObjectRecord> records,
+            IReadOnlyList<ManagedPivotCacheSlot> cacheSlots,
+            int livePivotCacheIndex)
+        {
+            if (records == null) throw new ArgumentNullException(nameof(records));
+            if (cacheSlots == null) throw new ArgumentNullException(nameof(cacheSlots));
+            if (cacheSlots.Count != 2 || livePivotCacheIndex < 1)
+            {
+                throw new InvalidOperationException(
+                    "A live managed PivotTable must be checked against its two backend cache slots and a valid cache index.");
+            }
+
+            var candidates = new List<RegisteredPivotCacheBinding>();
+            foreach (ManagedPivotCacheSlot slot in cacheSlots)
+            {
+                var exact = records.Where(record =>
+                    SameIdentity(record, slot.Identity)).ToList();
+                if (exact.Count > 1)
+                {
+                    throw new InvalidOperationException(
+                        "More than one ownership record claims a managed PivotCache backend slot.");
+                }
+
+                ManagedObjectRecord? registration = exact.SingleOrDefault();
+                if (registration != null &&
+                    int.TryParse(
+                        registration.Locator,
+                        NumberStyles.None,
+                        CultureInfo.InvariantCulture,
+                        out var registeredIndex) &&
+                    registeredIndex == livePivotCacheIndex)
+                {
+                    candidates.Add(new RegisteredPivotCacheBinding
+                    {
+                        Slot = slot,
+                        Registration = registration
+                    });
+                }
+            }
+
+            if (candidates.Count != 1)
+            {
+                throw new InvalidOperationException(
+                    "The live managed PivotTable does not match exactly one registered backend PivotCache slot.");
+            }
+
+            return candidates[0];
+        }
+
+        internal static void DemandExactExistingPivotContract(
+            ManagedObjectRecord pivotRegistration,
+            string expectedPivotName,
+            ManagedObjectRecord cacheRegistration,
+            ManagedPivotCacheSlot cacheSlot,
+            int livePivotCacheIndex,
+            PivotCacheSnapshot liveCache)
+        {
+            if (pivotRegistration == null) throw new ArgumentNullException(nameof(pivotRegistration));
+            if (cacheRegistration == null) throw new ArgumentNullException(nameof(cacheRegistration));
+            if (cacheSlot == null) throw new ArgumentNullException(nameof(cacheSlot));
+            if (liveCache == null) throw new ArgumentNullException(nameof(liveCache));
+
+            if (!string.Equals(
+                    pivotRegistration.ExcelName,
+                    expectedPivotName,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "The managed PivotTable identity is registered under a different name.");
+            }
+
+            if (!SameIdentity(cacheRegistration, cacheSlot.Identity) ||
+                !string.Equals(
+                    cacheRegistration.ExcelName,
+                    cacheSlot.RegistryName,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "The managed PivotTable does not reference its exact registered PivotCache slot.");
+            }
+
+
+            if ((!string.IsNullOrWhiteSpace(pivotRegistration.Locator) &&
+                 !string.Equals(
+                     pivotRegistration.Locator,
+                     cacheRegistration.Locator,
+                     StringComparison.Ordinal)) ||
+                (!string.IsNullOrWhiteSpace(pivotRegistration.SourceContract) &&
+                 !string.Equals(
+                     pivotRegistration.SourceContract,
+                     cacheRegistration.SourceContract,
+                     StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException(
+                    "The managed PivotTable ownership record disagrees with its registered PivotCache contract.");
+            }
+
+            if (!int.TryParse(
+                    cacheRegistration.Locator,
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out var registeredCacheIndex) ||
+                registeredCacheIndex < 1 ||
+                livePivotCacheIndex != registeredCacheIndex ||
+                liveCache.Index != registeredCacheIndex)
+            {
+                throw new InvalidOperationException(
+                    "The live PivotTable and registered PivotCache locator do not match.");
+            }
+
+            var registeredSource = PivotCacheSourceContract.Parse(
+                cacheRegistration.SourceContract ?? string.Empty);
+            if (!registeredSource.Matches(liveCache))
+            {
+                throw new InvalidOperationException(
+                    "The live PivotTable's cache no longer matches its registered source contract.");
+            }
+        }
+
+        private static dynamic? TryGetPivotTable(dynamic worksheet, string pivotName)
+        {
+            if (string.IsNullOrWhiteSpace(pivotName))
+            {
+                return null;
+            }
+
             try
             {
-                pivot = worksheet.PivotTables(pivotName);
+                return worksheet.PivotTables(pivotName);
             }
             catch (Exception)
             {
+                return null;
             }
+        }
 
-            if (pivot == null)
+        private static bool SameIdentity(
+            ManagedObjectRecord record,
+            ManagedObjectIdentity identity)
+        {
+            return string.Equals(record.ReportId, identity.ReportId, StringComparison.Ordinal) &&
+                   string.Equals(record.ObjectId, identity.ObjectId, StringComparison.Ordinal) &&
+                   record.Kind == identity.Kind;
+        }
+
+        private static dynamic? TryGetPivotCache(dynamic workbook, int index)
+        {
+            try
             {
-                return;
+                return workbook.PivotCaches().Item(index);
             }
-
-            if (!registry.IsOwned(workbook, identity, pivotName))
+            catch (Exception)
             {
-                throw new InvalidOperationException("A PivotTable with the requested name exists but is unmanaged.");
+                return null;
+            }
+        }
+
+        private static PivotCacheSnapshot ReadPivotCacheSnapshot(
+            dynamic workbook,
+            dynamic cache)
+        {
+            var index = Convert.ToInt32(cache.Index, CultureInfo.InvariantCulture);
+            var sourceType = Convert.ToInt32(cache.SourceType, CultureInfo.InvariantCulture);
+            var snapshot = new PivotCacheSnapshot
+            {
+                Index = index,
+                SourceType = sourceType,
+                PivotTableCount = CountPivotTablesUsingCache(workbook, index)
+            };
+            if (sourceType == SourceDatabase)
+            {
+                var source = Convert.ToString(cache.SourceData, CultureInfo.InvariantCulture);
+                snapshot.WorksheetSource = ResolveWorksheetSourceName(workbook, source);
+            }
+            else if (sourceType == SourceExternal)
+            {
+                dynamic connection = cache.WorkbookConnection;
+                snapshot.ConnectionName = Convert.ToString(
+                    connection.Name,
+                    CultureInfo.InvariantCulture);
             }
 
-            pivot.TableRange2.Clear();
+            return snapshot;
+        }
+
+        private static int CountPivotTablesUsingCache(dynamic workbook, int cacheIndex)
+        {
+            var result = 0;
+            dynamic worksheets = workbook.Worksheets;
+            var worksheetCount = Convert.ToInt32(worksheets.Count, CultureInfo.InvariantCulture);
+            for (var worksheetIndex = 1; worksheetIndex <= worksheetCount; worksheetIndex++)
+            {
+                dynamic worksheet = worksheets.Item(worksheetIndex);
+                dynamic pivots = worksheet.PivotTables();
+                var pivotCount = Convert.ToInt32(pivots.Count, CultureInfo.InvariantCulture);
+                for (var pivotIndex = 1; pivotIndex <= pivotCount; pivotIndex++)
+                {
+                    dynamic pivot = pivots.Item(pivotIndex);
+                    if (Convert.ToInt32(pivot.CacheIndex, CultureInfo.InvariantCulture) == cacheIndex)
+                    {
+                        result++;
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        private static string? ResolveWorksheetSourceName(
+            dynamic workbook,
+            string? sourceReference)
+        {
+            if (string.IsNullOrWhiteSpace(sourceReference))
+            {
+                return sourceReference;
+            }
+
+            dynamic worksheets = workbook.Worksheets;
+            var worksheetCount = Convert.ToInt32(worksheets.Count, CultureInfo.InvariantCulture);
+            for (var worksheetIndex = 1; worksheetIndex <= worksheetCount; worksheetIndex++)
+            {
+                dynamic worksheet = worksheets.Item(worksheetIndex);
+                dynamic tables = worksheet.ListObjects;
+                var tableCount = Convert.ToInt32(tables.Count, CultureInfo.InvariantCulture);
+                for (var tableIndex = 1; tableIndex <= tableCount; tableIndex++)
+                {
+                    dynamic table = tables.Item(tableIndex);
+                    var tableName = Convert.ToString(table.Name, CultureInfo.InvariantCulture);
+                    if (string.IsNullOrWhiteSpace(tableName))
+                    {
+                        continue;
+                    }
+
+                    if (PivotCacheSourceContract.WorksheetSourceMatches(sourceReference, tableName!))
+                    {
+                        return tableName;
+                    }
+
+                    dynamic range = table.Range;
+                    var localAddresses = new[]
+                    {
+                        Convert.ToString(range.Address[true, true, 1, false], CultureInfo.InvariantCulture),
+                        Convert.ToString(range.Address[true, true, -4150, false], CultureInfo.InvariantCulture)
+                    };
+                    var worksheetName = Convert.ToString(
+                        worksheet.Name,
+                        CultureInfo.InvariantCulture) ?? string.Empty;
+                    var qualifiedAddresses = localAddresses
+                        .Where(address => !string.IsNullOrWhiteSpace(address))
+                        .SelectMany(address => new[]
+                        {
+                            worksheetName + "!" + address,
+                            "'" + worksheetName.Replace("'", "''") + "'!" + address
+                        });
+                    var addresses = new[]
+                    {
+                        Convert.ToString(range.Address[true, true, 1, true], CultureInfo.InvariantCulture),
+                        Convert.ToString(range.Address[true, true, -4150, true], CultureInfo.InvariantCulture)
+                    }.Concat(localAddresses).Concat(qualifiedAddresses);
+                    if (addresses.Any(address =>
+                            SourceReferencesEqual(sourceReference, address) ||
+                            SourceReferenceStartsEqual(sourceReference, address)))
+                    {
+                        return tableName;
+                    }
+                }
+            }
+
+            return sourceReference;
+        }
+
+        internal static bool SourceReferencesEqual(string? left, string? right)
+        {
+            if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+            {
+                return false;
+            }
+
+            return string.Equals(
+                NormalizeSourceReference(left!),
+                NormalizeSourceReference(right!),
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static bool SourceReferenceStartsEqual(string? left, string? right)
+        {
+            if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+            {
+                return false;
+            }
+
+            var leftStart = SourceReferenceStart(NormalizeSourceReference(left!));
+            var rightStart = SourceReferenceStart(NormalizeSourceReference(right!));
+            return leftStart.IndexOf("[", StringComparison.Ordinal) < 0 &&
+                   rightStart.IndexOf("[", StringComparison.Ordinal) < 0 &&
+                   string.Equals(leftStart, rightStart, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string SourceReferenceStart(string value)
+        {
+            var rangeStart = value.LastIndexOf('!') + 1;
+            var separator = value.IndexOf(':', rangeStart);
+            return separator < 0 ? value : value.Substring(0, separator);
+        }
+
+        private static string NormalizeSourceReference(string value)
+        {
+            var normalized = value.Trim();
+            if (normalized.StartsWith("=", StringComparison.Ordinal))
+            {
+                normalized = normalized.Substring(1);
+            }
+
+            return normalized
+                .Replace("$", string.Empty)
+                .Replace("'", string.Empty)
+                .Replace("\"", string.Empty)
+                .Replace(" ", string.Empty);
         }
 
         internal static int ConsolidationFunction(AggregateFunction function)

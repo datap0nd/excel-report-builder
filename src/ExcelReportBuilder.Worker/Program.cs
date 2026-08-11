@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using ExcelReportBuilder.Agent.Security;
 
 namespace ExcelReportBuilder.Worker;
 
@@ -28,7 +29,14 @@ internal static class Program
 
         try
         {
-            var server = new AgentWorkerServer(options.PipeName);
+            string handshakeSecret = Environment.GetEnvironmentVariable(
+                WorkerHandshakeAuthenticator.SecretEnvironmentVariable) ?? string.Empty;
+            Environment.SetEnvironmentVariable(
+                WorkerHandshakeAuthenticator.SecretEnvironmentVariable,
+                null,
+                EnvironmentVariableTarget.Process);
+            var server = new AgentWorkerServer(options.PipeName, handshakeSecret);
+            handshakeSecret = string.Empty;
             await server.RunAsync(shutdown.Token).ConfigureAwait(false);
             return 0;
         }
@@ -59,7 +67,7 @@ internal sealed class WorkerOptions
     {
         if (args == null) throw new ArgumentNullException(nameof(args));
 
-        var pipeName = PipeNamePolicy.CreateDefaultForCurrentUser();
+        string? pipeName = null;
         for (var index = 0; index < args.Length; index++)
         {
             if (!string.Equals(args[index], "--pipe", StringComparison.Ordinal))
@@ -73,6 +81,12 @@ internal sealed class WorkerOptions
             }
 
             pipeName = args[index];
+        }
+
+        if (pipeName == null)
+        {
+            throw new ArgumentException(
+                "Usage: ExcelReportBuilder.Worker --pipe <pipe-name>");
         }
 
         return new WorkerOptions(PipeNamePolicy.Validate(pipeName));

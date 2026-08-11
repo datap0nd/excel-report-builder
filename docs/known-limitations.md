@@ -17,8 +17,29 @@ until the add-in has been validated in your own Excel environment.
   metric-stack blocks support direct aggregate Values.
 - Report blocks reserve a user-visible managed rectangle. A build fails before
   writing outside that rectangle or when rectangles overlap.
+- Saved setups that use advanced agent-only features remain exact and can be
+  rebuilt or changed through Chat, but their bounded manual projection is
+  visibly read-only. Representable manual setups with up to eight blocks reopen
+  editable when every block shares the same Rows, Columns, Values, Filters, and
+  layout controls.
 - Data Model refresh behavior depends on the installed Excel build. Large
   sources are never truncated, but no universal completion time is promised.
+- Excel exposes PivotCaches by workbook index but does not expose a cache name
+  or delete operation. The add-in therefore records an exact managed cache
+  identity, index, and source contract in workbook metadata. Normal rebuilds
+  reuse that exclusive cache. Each block has one bounded cache slot for the
+  worksheet route and one for the Data Model route, so switching routes and
+  switching back reuses the prior compatible cache. A changed source contract,
+  a shared cache, or a missing cache retires only the add-in's exact slot and
+  creates a replacement; unmanaged caches are never modified. Excel may retain
+  an inaccessible orphan cache after an external deletion or source replacement.
+  Because deleting a managed PivotTable does not delete its cache, v0.1 retains
+  these two exact cache-slot records for each historical managed block. Re-adding
+  that block can reuse the cache instead of creating an untraceable duplicate.
+- Managed Power Query and Data Model objects keep stable names and refresh in
+  place on same-route rebuilds. When the route changes, the inactive managed
+  backend can remain in the workbook because an Excel-owned cache may still
+  depend on it. At most one exact owned canonical object is retained per backend.
 - Setup is not Authenticode-signed. Verify the published SHA-256 checksum before
   running it.
 - CI verifies builds, contracts, COM registration, worker startup, installation,

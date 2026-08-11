@@ -299,7 +299,19 @@ namespace ExcelReportBuilder.Excel.Execution
                 reportId,
                 objectId + "_canonical_audit_connection",
                 ManagedObjectKind.DataModelConnection);
-            DeletePriorManagedConnection(workbook, connectionIdentity);
+
+            var queryIdentity = new ManagedObjectIdentity(
+                reportId,
+                objectId + "_canonical_audit_query",
+                ManagedObjectKind.CanonicalQuery);
+            var queryName = queryIdentity.ExcelName;
+            var connectionString = CanonicalConnectionContract.ConnectionString(queryName);
+            var commandText = CanonicalConnectionContract.CommandText(queryName);
+            DeletePriorManagedConnection(
+                workbook,
+                connectionIdentity,
+                connectionString,
+                commandText);
 
             var tableIdentity = new ManagedObjectIdentity(
                 reportId,
@@ -312,11 +324,6 @@ namespace ExcelReportBuilder.Excel.Execution
                     "An unmanaged table conflicts with the normalized-data audit result name.");
             }
 
-            var queryIdentity = new ManagedObjectIdentity(
-                reportId,
-                objectId + "_canonical_audit_query",
-                ManagedObjectKind.CanonicalQuery);
-            var queryName = queryIdentity.ExcelName;
             progressSink.Report(new ExcelProgress
             {
                 Stage = ExcelBuildStage.Checking,
@@ -327,9 +334,6 @@ namespace ExcelReportBuilder.Excel.Execution
             queryService.ReplaceQuery(workbook, queryIdentity, queryName, auditPlan.Formula);
             cancellationToken.ThrowIfCancellationRequested();
 
-            var connectionString =
-                "OLEDB;Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;Location=" +
-                queryName + ";Extended Properties=\"\"";
             dynamic listObject = sheet.ListObjects.Add(
                 SourceExternal,
                 connectionString,
@@ -338,8 +342,7 @@ namespace ExcelReportBuilder.Excel.Execution
                 sheet.Range["A1"]);
             listObject.Name = tableName;
             dynamic queryTable = listObject.QueryTable;
-            queryTable.CommandType = CommandTypeSql;
-            queryTable.CommandText = new[] { "SELECT * FROM [" + queryName.Replace("]", "]]" ) + "]" };
+            CanonicalDataLoader.ConfigureWorksheetConnection(queryTable, commandText);
             queryTable.RefreshStyle = 1;
             queryTable.AdjustColumnWidth = false;
             queryTable.PreserveFormatting = true;
@@ -354,6 +357,10 @@ namespace ExcelReportBuilder.Excel.Execution
                     throw new InvalidOperationException("Excel did not expose the audit connection name.");
                 }
 
+                CanonicalDataLoader.DemandExactWorksheetConnection(
+                    queryTable,
+                    connectionString,
+                    commandText);
                 registry.Register(workbook, connectionIdentity, connectionName!);
             }
             catch (Exception exception) when (!(exception is InvalidOperationException))
@@ -405,12 +412,23 @@ namespace ExcelReportBuilder.Excel.Execution
             return result;
         }
 
-        private void DeletePriorManagedConnection(dynamic workbook, ManagedObjectIdentity identity)
+        internal void DeletePriorManagedConnection(
+            dynamic workbook,
+            ManagedObjectIdentity identity,
+            string expectedConnectionString,
+            string expectedCommandText)
         {
-            var record = registry.Load((object)workbook).SingleOrDefault(item =>
+            var records = registry.Load((object)workbook).Where(item =>
                 string.Equals(item.ReportId, identity.ReportId, StringComparison.Ordinal) &&
                 string.Equals(item.ObjectId, identity.ObjectId, StringComparison.Ordinal) &&
-                item.Kind == identity.Kind);
+                item.Kind == identity.Kind).ToList();
+            if (records.Count > 1)
+            {
+                throw new InvalidOperationException(
+                    "More than one ownership record claims the prior normalized-data audit connection.");
+            }
+
+            var record = records.SingleOrDefault();
             if (record == null)
             {
                 return;
@@ -419,16 +437,25 @@ namespace ExcelReportBuilder.Excel.Execution
             dynamic? connection = TryGetConnection(workbook, record.ExcelName);
             if (connection == null)
             {
+                registry.Remove((object)workbook, new[] { identity });
                 return;
             }
 
-            if (!registry.IsOwned(workbook, identity, record.ExcelName))
+            var actualName = Convert.ToString(
+                connection.Name,
+                CultureInfo.InvariantCulture) ?? string.Empty;
+            if (!string.Equals(actualName, record.ExcelName, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
-                    "The prior normalized-data audit connection is no longer managed.");
+                    "The prior normalized-data audit connection no longer has its exact registered name.");
             }
 
+            CanonicalDataLoader.DemandExactWorksheetWorkbookConnection(
+                connection,
+                expectedConnectionString,
+                expectedCommandText);
             connection.Delete();
+            registry.Remove((object)workbook, new[] { identity });
         }
 
         internal static CanonicalAuditResult ReadResult(

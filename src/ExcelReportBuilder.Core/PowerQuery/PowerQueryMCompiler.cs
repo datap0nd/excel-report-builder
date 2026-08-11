@@ -46,6 +46,24 @@ namespace ExcelReportBuilder.Core.PowerQuery
             @"^[A-Za-z_\\][A-Za-z0-9_.\\]*$",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+        private static readonly string[] BoundedDateFormats =
+        {
+            "yyyy-MM-dd",
+            "yyyy/MM/dd",
+            "M/d/yyyy",
+            "d-MMM-yyyy",
+            "MMM d yyyy",
+            "MMMM d yyyy"
+        };
+
+        private static readonly string[] BoundedDateTimeFormats =
+        {
+            "yyyy-MM-dd HH:mm:ss",
+            "yyyy-MM-ddTHH:mm:ss",
+            "yyyy-MM-ddTHH:mm:ss.FFFFFFF",
+            "M/d/yyyy h:mm:ss tt"
+        };
+
         public static MCompilationResult Compile(ReportSpecV1 specification)
         {
             if (specification == null)
@@ -90,10 +108,25 @@ namespace ExcelReportBuilder.Core.PowerQuery
                 throw new MCompilationException("TOO_MANY_TRANSFORMS", "At most 100 bounded transforms can be compiled.");
             }
 
-            var lines = new List<string>
+            var workbookSource = "Excel.CurrentWorkbook(){[Name=" +
+                MString(source.WorkbookObjectName) + "]}[Content]";
+            var lines = new List<string>();
+            switch (source.Kind)
             {
-                "    Source = Excel.CurrentWorkbook(){[Name=" + MString(source.WorkbookObjectName) + "]}[Content]"
-            };
+                case WorkbookSourceKind.Table:
+                    lines.Add("    Source = " + workbookSource);
+                    break;
+                case WorkbookSourceKind.NamedRange:
+                    lines.Add("    RawSource = " + workbookSource);
+                    lines.Add(
+                        "    Source = Table.PromoteHeaders(RawSource, " +
+                        "[PromoteAllScalars = true, Culture = \"en-US\"])");
+                    break;
+                default:
+                    throw new MCompilationException(
+                        "SOURCE_KIND_INVALID",
+                        "Only Excel tables and managed named ranges can be compiled.");
+            }
             var appliedIds = new List<string>();
             var current = "Source";
             for (var index = 0; index < materialized.Count; index++)
@@ -155,9 +188,7 @@ namespace ExcelReportBuilder.Core.PowerQuery
                         + MString(RequireColumn(rename.From, transform)) + ", "
                         + MString(RequireColumn(rename.To, transform)) + "}}, MissingField.Error)";
                 case ChangeColumnTypeTransform changeType:
-                    return "Table.TransformColumnTypes(" + previous + ", {{"
-                        + MString(RequireColumn(changeType.Column, transform)) + ", "
-                        + MType(changeType.DataType) + "}}, \"en-US\")";
+                    return CompileChangeColumnType(previous, changeType);
                 case TrimTextTransform trim:
                     return CompileTrim(previous, trim);
                 case ReplaceValueTransform replace:
@@ -194,16 +225,70 @@ namespace ExcelReportBuilder.Core.PowerQuery
         {
             var columns = RequireColumns(transform.Columns, transform);
             var operations = columns.Select(column => "{" + MString(column)
-                + ", each if _ is null then null else Text.Trim(Text.From(_)), type nullable text}");
+                + ", each if _ is null then null else Text.Trim(Text.From(_, \"en-US\")), type nullable text}");
             return "Table.TransformColumns(" + previous + ", {" + string.Join(", ", operations) + "})";
+        }
+
+        private static string CompileChangeColumnType(
+            string previous,
+            ChangeColumnTypeTransform transform)
+        {
+            var column = RequireColumn(transform.Column, transform);
+            string conversion;
+            string resultType;
+            switch (transform.DataType)
+            {
+                case ColumnDataType.Text:
+                    conversion = "if _ is null then null"
+                        + " else if _ is text or _ is logical or _ is number or _ is date or _ is datetime"
+                        + " then Text.From(_, \"en-US\")"
+                        + " else error Error.Record(\"Invalid text value\", \"Text conversion accepts text, logical, finite or non-finite numbers, dates, date-times, or blank.\", null)";
+                    resultType = "type nullable text";
+                    break;
+                case ColumnDataType.WholeNumber:
+                    conversion = "let converted = " + CompileBoundedDecimalValue("_", "Type conversion")
+                        + " in if converted is null then null else Int64.From(converted, \"en-US\")";
+                    resultType = "Int64.Type";
+                    break;
+                case ColumnDataType.DecimalNumber:
+                    conversion = CompileBoundedDecimalValue("_", "Type conversion");
+                    resultType = "type nullable number";
+                    break;
+                case ColumnDataType.Boolean:
+                    conversion = "if _ is null then null else if _ is logical then _"
+                        + " else if _ is number then " + CompileBoundedDecimalValue("_", "Logical conversion") + " <> 0"
+                        + " else if _ is text then let text = Text.Lower(Text.Trim(_)) in"
+                        + " if text = \"true\" then true else if text = \"false\" then false"
+                        + " else error Error.Record(\"Invalid logical value\", \"Logical text must be true or false.\", null)"
+                        + " else error Error.Record(\"Invalid logical value\", \"Logical values must be logical, numeric, true, false, or blank.\", null)";
+                    resultType = "type nullable logical";
+                    break;
+                case ColumnDataType.Date:
+                    conversion = CompileBoundedTemporalValue("_", dateTime: false);
+                    resultType = "type nullable date";
+                    break;
+                case ColumnDataType.DateTime:
+                    conversion = CompileBoundedTemporalValue("_", dateTime: true);
+                    resultType = "type nullable datetime";
+                    break;
+                default:
+                    throw new MCompilationException(
+                        "COLUMN_DATA_TYPE_INVALID",
+                        "The column data type cannot be compiled.",
+                        transform.Id);
+            }
+
+            return "Table.TransformColumns(" + previous + ", {{" + MString(column)
+                + ", each " + conversion + ", " + resultType
+                + "}}, null, MissingField.Error)";
         }
 
         private static string CompileNormalizeBlanks(string previous, NormalizeBlanksTransform transform)
         {
             var replacement = MLiteral(transform.Replacement, transform);
             var predicate = transform.TreatWhitespaceAsBlank
-                ? "Value.Is(_, type text) and Text.Trim(Text.From(_)) = \"\""
-                : "Value.Is(_, type text) and Text.From(_) = \"\"";
+                ? "Value.Is(_, type text) and Text.Trim(Text.From(_, \"en-US\")) = \"\""
+                : "Value.Is(_, type text) and Text.From(_, \"en-US\") = \"\"";
             var operations = RequireColumns(transform.Columns, transform)
                 .Select(column => "{" + MString(column) + ", each if _ is null then " + replacement
                     + " else if " + predicate + " then " + replacement + " else _, type any}");
@@ -255,10 +340,10 @@ namespace ExcelReportBuilder.Core.PowerQuery
             {
                 case RowFilterOperator.IsBlank:
                     RequireNoFilterValue(transform);
-                    return field + " is null or (Value.Is(" + field + ", type text) and Text.Trim(Text.From(" + field + ")) = \"\")";
+                    return field + " is null or (Value.Is(" + field + ", type text) and Text.Trim(Text.From(" + field + ", \"en-US\")) = \"\")";
                 case RowFilterOperator.IsNotBlank:
                     RequireNoFilterValue(transform);
-                    return "not (" + field + " is null or (Value.Is(" + field + ", type text) and Text.Trim(Text.From(" + field + ")) = \"\"))";
+                    return "not (" + field + " is null or (Value.Is(" + field + ", type text) and Text.Trim(Text.From(" + field + ", \"en-US\")) = \"\"))";
             }
 
             if (transform.Value == null)
@@ -274,22 +359,22 @@ namespace ExcelReportBuilder.Core.PowerQuery
                 case RowFilterOperator.NotEqual:
                     return field + " <> " + literal;
                 case RowFilterOperator.GreaterThan:
-                    return field + " > " + literal;
+                    return field + " <> null and " + literal + " <> null and " + field + " > " + literal;
                 case RowFilterOperator.GreaterThanOrEqual:
-                    return field + " >= " + literal;
+                    return field + " <> null and " + literal + " <> null and " + field + " >= " + literal;
                 case RowFilterOperator.LessThan:
-                    return field + " < " + literal;
+                    return field + " <> null and " + literal + " <> null and " + field + " < " + literal;
                 case RowFilterOperator.LessThanOrEqual:
-                    return field + " <= " + literal;
+                    return field + " <> null and " + literal + " <> null and " + field + " <= " + literal;
                 case RowFilterOperator.Contains:
                     RequireTextLiteral(transform.Value, transform);
-                    return field + " <> null and Text.Contains(Text.From(" + field + "), " + literal + ", Comparer.Ordinal)";
+                    return field + " <> null and Text.Contains(Text.From(" + field + ", \"en-US\"), " + literal + ", Comparer.Ordinal)";
                 case RowFilterOperator.StartsWith:
                     RequireTextLiteral(transform.Value, transform);
-                    return field + " <> null and Text.StartsWith(Text.From(" + field + "), " + literal + ", Comparer.Ordinal)";
+                    return field + " <> null and Text.StartsWith(Text.From(" + field + ", \"en-US\"), " + literal + ", Comparer.Ordinal)";
                 case RowFilterOperator.EndsWith:
                     RequireTextLiteral(transform.Value, transform);
-                    return field + " <> null and Text.EndsWith(Text.From(" + field + "), " + literal + ", Comparer.Ordinal)";
+                    return field + " <> null and Text.EndsWith(Text.From(" + field + ", \"en-US\"), " + literal + ", Comparer.Ordinal)";
                 default:
                     throw new MCompilationException("FILTER_OPERATOR_UNSUPPORTED", "The filter operator cannot be compiled.", transform.Id);
             }
@@ -320,7 +405,7 @@ namespace ExcelReportBuilder.Core.PowerQuery
                 if (evidence.MatchKind == TotalRowMatchKind.IsBlank)
                 {
                     conditions.Add("(" + field + " is null or (Value.Is(" + field
-                        + ", type text) and Text.Trim(Text.From(" + field + ")) = \"\"))");
+                        + ", type text) and Text.Trim(Text.From(" + field + ", \"en-US\")) = \"\"))");
                     continue;
                 }
 
@@ -343,12 +428,12 @@ namespace ExcelReportBuilder.Core.PowerQuery
                             break;
                         case TotalRowMatchKind.StartsWith:
                             RequireTextLiteral(value, transform);
-                            valueConditions.Add(field + " <> null and Text.StartsWith(Text.From(" + field + "), "
+                            valueConditions.Add(field + " <> null and Text.StartsWith(Text.From(" + field + ", \"en-US\"), "
                                 + literal + ", Comparer.Ordinal)");
                             break;
                         case TotalRowMatchKind.Contains:
                             RequireTextLiteral(value, transform);
-                            valueConditions.Add(field + " <> null and Text.Contains(Text.From(" + field + "), "
+                            valueConditions.Add(field + " <> null and Text.Contains(Text.From(" + field + ", \"en-US\"), "
                                 + literal + ", Comparer.Ordinal)");
                             break;
                         default:
@@ -389,27 +474,27 @@ namespace ExcelReportBuilder.Core.PowerQuery
                 switch (column.Part)
                 {
                     case DerivedPeriodPart.Year:
-                        valueExpression = "Date.Year(Date.From(" + dateField + "))";
+                        valueExpression = "Date.Year(Date.From(" + dateField + ", \"en-US\"))";
                         valueType = "Int64.Type";
                         break;
                     case DerivedPeriodPart.Half:
-                        valueExpression = "if Date.Month(Date.From(" + dateField + ")) <= 6 then \"H1\" else \"H2\"";
+                        valueExpression = "if Date.Month(Date.From(" + dateField + ", \"en-US\")) <= 6 then \"H1\" else \"H2\"";
                         valueType = "type text";
                         break;
                     case DerivedPeriodPart.Quarter:
-                        valueExpression = "\"Q\" & Number.ToText(Date.QuarterOfYear(Date.From(" + dateField + ")), \"0\", \"en-US\")";
+                        valueExpression = "\"Q\" & Number.ToText(Date.QuarterOfYear(Date.From(" + dateField + ", \"en-US\")), \"0\", \"en-US\")";
                         valueType = "type text";
                         break;
                     case DerivedPeriodPart.MonthNumber:
-                        valueExpression = "Date.Month(Date.From(" + dateField + "))";
+                        valueExpression = "Date.Month(Date.From(" + dateField + ", \"en-US\"))";
                         valueType = "Int64.Type";
                         break;
                     case DerivedPeriodPart.MonthName:
-                        valueExpression = "Date.MonthName(Date.From(" + dateField + "), \"en-US\")";
+                        valueExpression = "Date.MonthName(Date.From(" + dateField + ", \"en-US\"), \"en-US\")";
                         valueType = "type text";
                         break;
                     case DerivedPeriodPart.YearMonth:
-                        valueExpression = "Date.ToText(Date.StartOfMonth(Date.From(" + dateField + ")), \"yyyy-MM\", \"en-US\")";
+                        valueExpression = "Date.ToText(Date.StartOfMonth(Date.From(" + dateField + ", \"en-US\")), \"yyyy-MM\", \"en-US\")";
                         valueType = "type text";
                         break;
                     default:
@@ -432,13 +517,13 @@ namespace ExcelReportBuilder.Core.PowerQuery
             switch (transform.Operator)
             {
                 case ArithmeticOperator.Add:
-                    operation = left + " + " + right;
+                    operation = "Value.Add(left, right, Precision.Decimal)";
                     break;
                 case ArithmeticOperator.Subtract:
-                    operation = left + " - " + right;
+                    operation = "Value.Subtract(left, right, Precision.Decimal)";
                     break;
                 case ArithmeticOperator.Multiply:
-                    operation = left + " * " + right;
+                    operation = "Value.Multiply(left, right, Precision.Decimal)";
                     break;
                 case ArithmeticOperator.Divide:
                     if (transform.Right.Kind == ArithmeticOperandKind.Number && transform.Right.Number == 0m)
@@ -449,9 +534,15 @@ namespace ExcelReportBuilder.Core.PowerQuery
                             transform.Id);
                     }
 
-                    operation = transform.ReturnNullOnZeroDenominator
-                        ? "if " + right + " is null or " + right + " = 0 then null else " + left + " / " + right
-                        : left + " / " + right;
+                    if (!transform.ReturnNullOnZeroDenominator)
+                    {
+                        throw new MCompilationException(
+                            "ARITHMETIC_DIVIDE_NULL_ON_ZERO_REQUIRED",
+                            "Division must return blank when the denominator is zero.",
+                            transform.Id);
+                    }
+
+                    operation = "if right is null or right = 0 then null else Value.Divide(left, right, Precision.Decimal)";
                     break;
                 default:
                     throw new MCompilationException("ARITHMETIC_OPERATOR_UNSUPPORTED", "The arithmetic operation cannot be compiled.", transform.Id);
@@ -466,7 +557,13 @@ namespace ExcelReportBuilder.Core.PowerQuery
                     transform.Id);
             }
 
-            return "Table.AddColumn(" + previous + ", " + MString(output) + ", each " + operation + ", " + resultType + ")";
+            var result = transform.ResultType == ColumnDataType.WholeNumber
+                ? "if calculated is null then null else Int64.From(calculated, \"en-US\")"
+                : "calculated";
+            return "Table.AddColumn(" + previous + ", " + MString(output)
+                + ", each let left = " + left + ", right = " + right
+                + ", calculated = if left is null or right is null then null else " + operation
+                + " in " + result + ", " + resultType + ")";
         }
 
         private static string CompileArithmeticOperand(ArithmeticOperand operand, TransformStep transform)
@@ -478,7 +575,8 @@ namespace ExcelReportBuilder.Core.PowerQuery
 
             if (operand.Kind == ArithmeticOperandKind.Column)
             {
-                return "Number.From(" + MField(RequireColumn(operand.Column, transform)) + ")";
+                var field = MField(RequireColumn(operand.Column, transform));
+                return CompileBoundedDecimalValue(field, "Arithmetic operand");
             }
 
             if (!operand.Number.HasValue)
@@ -486,7 +584,49 @@ namespace ExcelReportBuilder.Core.PowerQuery
                 throw new MCompilationException("ARITHMETIC_NUMBER_REQUIRED", "A numeric operand requires a value.", transform.Id);
             }
 
-            return operand.Number.Value.ToString(CultureInfo.InvariantCulture);
+            return "Decimal.From(" + MString(operand.Number.Value.ToString(CultureInfo.InvariantCulture))
+                + ", \"en-US\")";
+        }
+
+        private static string CompileBoundedDecimalValue(string rawExpression, string errorReason)
+        {
+            return "(let raw = " + rawExpression
+                + ", text = if raw is text then Text.Trim(raw) else null"
+                + ", validText = text <> null and text <> \"\" and Text.Select(text, {\"0\"..\"9\", \"+\", \"-\", \".\", \",\", \"e\", \"E\"}) = text"
+                + ", converted = if raw is null then [HasError = false, Value = null]"
+                + " else if raw is number then try Decimal.From(raw, \"en-US\")"
+                + " else if validText then try Decimal.From(text, \"en-US\")"
+                + " else [HasError = true]"
+                + " in if converted[HasError] then error Error.Record(" + MString("Invalid " + errorReason.ToLowerInvariant())
+                + ", " + MString(errorReason + "s must be finite decimal numbers, numeric text, or blank.")
+                + ", null) else converted[Value])";
+        }
+
+        private static string CompileBoundedTemporalValue(string rawExpression, bool dateTime)
+        {
+            string function = dateTime ? "DateTime" : "Date";
+            IEnumerable<string> formats = dateTime
+                ? BoundedDateTimeFormats.Concat(BoundedDateFormats)
+                : BoundedDateFormats;
+            string attempts = string.Join(", ", formats.Select(format =>
+                "try " + function + ".FromText(text, [Format = " + MString(format)
+                + ", Culture = \"en-US\"])"));
+            string directKinds = dateTime
+                ? "raw is datetime or raw is date or raw is number"
+                : "raw is date or raw is datetime or raw is datetimezone or raw is number";
+            string description = dateTime
+                ? "Date-time values must be dates, date-times, Excel date serials, supported en-US date-time text, or blank."
+                : "Date values must be dates, date-times, Excel date serials, supported en-US date text, or blank.";
+            return "(let raw = " + rawExpression
+                + ", text = if raw is text then Text.Trim(raw) else null"
+                + ", attempts = if text = null or text = \"\" then {} else {" + attempts + "}"
+                + ", successful = List.First(List.Select(attempts, each not _[HasError]), null)"
+                + ", parsedText = if successful = null then null else successful[Value]"
+                + " in if raw is null then null else if " + directKinds
+                + " then " + function + ".From(raw, \"en-US\")"
+                + " else if parsedText <> null then parsedText"
+                + " else error Error.Record(" + MString("Invalid " + function.ToLowerInvariant() + " value")
+                + ", " + MString(description) + ", null))";
         }
 
         private static string CompilePeriodNormalization(
@@ -569,8 +709,8 @@ namespace ExcelReportBuilder.Core.PowerQuery
             int normalizationDeclarationIndex = declarations.Count - 2;
             declarations[normalizationDeclarationIndex] = declarations[normalizationDeclarationIndex]
                 .Replace(
-                    "else if raw is number and not compact then try Date.From(raw) otherwise null else null",
-                    "else null")
+                    "nativeDate = if raw is date or raw is datetime or raw is datetimezone then Date.From(raw) else if raw is number and not compact then try Date.From(raw) otherwise null else null",
+                    "numericCompactCandidate = raw is number and raw >= 100000 and raw <= 999999 and Number.Mod(raw, 1) = 0, nativeDate = if raw is date or raw is datetime or raw is datetimezone then Date.From(raw) else if raw is number and not numericCompactCandidate then try Date.From(raw) otherwise null else null")
                 .Replace(
                     "parts = if text = null then {} else List.Select(Text.SplitAny(text, \" -_./\"), each _ <> \"\")",
                     "parts = if text = null then {} else Text.SplitAny(text, \" -_./\")");
@@ -652,8 +792,29 @@ namespace ExcelReportBuilder.Core.PowerQuery
             knownNames.Add(mapping.MetricColumnName);
             var headerColumn = ChooseInternalName("__erb_period_header", knownNames);
             knownNames.Add(headerColumn);
+            var cellsColumn = ChooseInternalName("__erb_period_cells", knownNames);
+            knownNames.Add(cellsColumn);
+            var cellHeaderField = ChooseInternalName("__erb_cell_header", knownNames);
+            knownNames.Add(cellHeaderField);
+            var cellValueField = ChooseInternalName("__erb_cell_value", knownNames);
             var selectedColumns = keys.Concat(periodColumns.Select(column => column.SourceColumn)).ToList();
             var periodCase = CompileMappingCase(headerColumn, periodColumns, mapping.ReportingYear, false, transform);
+            // Table.Unpivot omits null cells. Expand an explicit bounded record for
+            // every mapped source column so row identity never depends on its value.
+            var cellRecords = periodColumns.Select(column =>
+                "Record.FromList({" + MString(column.SourceColumn) + ", "
+                + MField(column.SourceColumn) + "}, {" + MString(cellHeaderField)
+                + ", " + MString(cellValueField) + "})");
+            var rowPreservingExpansion = "selected = Table.SelectColumns(" + previous + ", "
+                + MStringList(selectedColumns) + ", MissingField.Error), withCells = Table.AddColumn(selected, "
+                + MString(cellsColumn) + ", each {" + string.Join(", ", cellRecords)
+                + "}, type list), withoutMappedColumns = Table.RemoveColumns(withCells, "
+                + MStringList(periodColumns.Select(column => column.SourceColumn))
+                + ", MissingField.Error), expandedCells = Table.ExpandListColumn(withoutMappedColumns, "
+                + MString(cellsColumn) + "), expanded = Table.ExpandRecordColumn(expandedCells, "
+                + MString(cellsColumn) + ", {" + MString(cellHeaderField) + ", "
+                + MString(cellValueField) + "}, {" + MString(headerColumn) + ", "
+                + MString(mapping.ValueColumnName) + "})";
 
             if (mapping.Kind == PeriodMappingKind.MonthHeaders)
             {
@@ -662,11 +823,8 @@ namespace ExcelReportBuilder.Core.PowerQuery
                     throw new MCompilationException("METRIC_NOT_ALLOWED", "Month-only normalization cannot contain metric names.", transform.Id);
                 }
 
-                return "(let selected = Table.SelectColumns(" + previous + ", " + MStringList(selectedColumns)
-                    + ", MissingField.Error), unpivoted = Table.Unpivot(selected, "
-                    + MStringList(periodColumns.Select(column => column.SourceColumn)) + ", "
-                    + MString(headerColumn) + ", " + MString(mapping.ValueColumnName)
-                    + "), withPeriod = Table.AddColumn(unpivoted, " + MString(mapping.PeriodColumnName)
+                return "(let " + rowPreservingExpansion
+                    + ", withPeriod = Table.AddColumn(expanded, " + MString(mapping.PeriodColumnName)
                     + ", each " + periodCase + ", type date), cleaned = Table.RemoveColumns(withPeriod, {"
                     + MString(headerColumn) + "}, MissingField.Error) in cleaned)";
             }
@@ -678,11 +836,8 @@ namespace ExcelReportBuilder.Core.PowerQuery
 
             ValidateCompleteMetricMatrix(periodColumns, mapping.ReportingYear, transform);
             var metricCase = CompileMappingCase(headerColumn, periodColumns, mapping.ReportingYear, true, transform);
-            return "(let selected = Table.SelectColumns(" + previous + ", " + MStringList(selectedColumns)
-                + ", MissingField.Error), unpivoted = Table.Unpivot(selected, "
-                + MStringList(periodColumns.Select(column => column.SourceColumn)) + ", "
-                + MString(headerColumn) + ", " + MString(mapping.ValueColumnName)
-                + "), withPeriod = Table.AddColumn(unpivoted, " + MString(mapping.PeriodColumnName)
+            return "(let " + rowPreservingExpansion
+                + ", withPeriod = Table.AddColumn(expanded, " + MString(mapping.PeriodColumnName)
                 + ", each " + periodCase + ", type date), withMetric = Table.AddColumn(withPeriod, "
                 + MString(mapping.MetricColumnName) + ", each " + metricCase
                 + ", type text), cleaned = Table.RemoveColumns(withMetric, {" + MString(headerColumn)

@@ -42,6 +42,9 @@ namespace ExcelReportBuilder.AddIn.Presentation
         private bool _allowRemoteWorkbookData;
         private SecureString? _apiKey;
         private bool _savedApiKeyAvailable;
+        private string? _savedCredentialBaseUrl;
+        private bool _savedCredentialHasProtectedKey;
+        private long _endpointConfigurationVersion;
         private string _endpointStateLabel = "Not checked";
         private string _endpointValidationMessage = "Check the endpoint before sending a request.";
         private bool _endpointCheckPassed;
@@ -61,7 +64,12 @@ namespace ExcelReportBuilder.AddIn.Presentation
         private int _rowIndent = 1;
         private string _rowGrandTotalLabel = "Grand Total";
         private string _columnGrandTotalLabel = "Grand Total";
+        private bool _manualProjectionComplete = true;
+        private bool _manualRestrictionMessageShown;
+        private bool _applyingManualEditingState;
         private bool _disposed;
+
+        public event EventHandler? ApiKeyClearRequested;
 
         public ShellViewModel()
             : this(new SyntheticReportBuilderHostService())
@@ -180,17 +188,17 @@ namespace ExcelReportBuilder.AddIn.Presentation
                 PreviewWideHeaderMappingAsync,
                 CanPreviewWideHeaderMapping);
             AddPlacementCommand = new RelayCommand(AddPlacement, CanAddPlacement);
-            RemovePlacementCommand = new RelayCommand(RemoveSelectedPlacement, () => SelectedPlacement != null && !Activity.IsOperationActive);
+            RemovePlacementCommand = new RelayCommand(RemoveSelectedPlacement, () => SelectedPlacement != null && CanEditManualSpecification && !Activity.IsOperationActive);
             MovePlacementUpCommand = new RelayCommand(() => MoveSelectedPlacement(-1), () => CanMoveSelectedPlacement(-1));
             MovePlacementDownCommand = new RelayCommand(() => MoveSelectedPlacement(1), () => CanMoveSelectedPlacement(1));
-            AddTransformCommand = new RelayCommand(AddTransformRule, () => !Activity.IsOperationActive && _source != null);
-            RemoveTransformCommand = new RelayCommand(RemoveSelectedTransformRule, () => SelectedTransformRule != null && !Activity.IsOperationActive);
-            AddCalculatedMetricCommand = new RelayCommand(AddCalculatedMetric, () => !Activity.IsOperationActive && _source != null);
-            RemoveCalculatedMetricCommand = new RelayCommand(RemoveSelectedCalculatedMetric, () => SelectedCalculatedMetric != null && !Activity.IsOperationActive);
-            AddReportBlockCommand = new RelayCommand(AddReportBlock, () => !Activity.IsOperationActive && _source != null && ReportBlocks.Count < 8);
-            RemoveReportBlockCommand = new RelayCommand(RemoveSelectedReportBlock, () => SelectedReportBlock != null && ReportBlocks.Count > 1 && !Activity.IsOperationActive);
-            AddRequiredCheckCommand = new RelayCommand(AddRequiredCheck, () => !Activity.IsOperationActive && _source != null);
-            RemoveRequiredCheckCommand = new RelayCommand(RemoveSelectedRequiredCheck, () => SelectedCheckRule != null && !Activity.IsOperationActive);
+            AddTransformCommand = new RelayCommand(AddTransformRule, () => CanEditManualSpecification && !Activity.IsOperationActive && _source != null);
+            RemoveTransformCommand = new RelayCommand(RemoveSelectedTransformRule, () => CanEditManualSpecification && SelectedTransformRule != null && !Activity.IsOperationActive);
+            AddCalculatedMetricCommand = new RelayCommand(AddCalculatedMetric, () => CanEditManualSpecification && !Activity.IsOperationActive && _source != null);
+            RemoveCalculatedMetricCommand = new RelayCommand(RemoveSelectedCalculatedMetric, () => CanEditManualSpecification && SelectedCalculatedMetric != null && !Activity.IsOperationActive);
+            AddReportBlockCommand = new RelayCommand(AddReportBlock, () => CanEditManualSpecification && !Activity.IsOperationActive && _source != null && ReportBlocks.Count < 8);
+            RemoveReportBlockCommand = new RelayCommand(RemoveSelectedReportBlock, () => CanEditManualSpecification && SelectedReportBlock != null && ReportBlocks.Count > 1 && !Activity.IsOperationActive);
+            AddRequiredCheckCommand = new RelayCommand(AddRequiredCheck, () => CanEditManualSpecification && !Activity.IsOperationActive && _source != null);
+            RemoveRequiredCheckCommand = new RelayCommand(RemoveSelectedRequiredCheck, () => CanEditManualSpecification && SelectedCheckRule != null && !Activity.IsOperationActive);
             BuildDraftCommand = new AsyncRelayCommand(BuildDraftAsync, CanBuildDraft);
             TogglePauseCommand = new RelayCommand(TogglePause, () => Activity.CanPause);
             CancelCommand = new RelayCommand(CancelOperation, () => Activity.CanCancel);
@@ -211,6 +219,8 @@ namespace ExcelReportBuilder.AddIn.Presentation
                 _allowRemoteHttp = savedEndpoint.AllowRemoteHttp;
                 _allowRemoteWorkbookData = savedEndpoint.AllowRemoteWorkbookData;
                 _savedApiKeyAvailable = savedEndpoint.HasProtectedApiKey;
+                _savedCredentialBaseUrl = savedEndpoint.BaseUrl;
+                _savedCredentialHasProtectedKey = savedEndpoint.HasProtectedApiKey;
                 EndpointValidationMessage = savedEndpoint.HasProtectedApiKey
                     ? "Saved endpoint settings loaded. The API key is protected for this Windows user."
                     : "Saved endpoint settings loaded.";
@@ -432,6 +442,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _repeatRowLabels;
             set
             {
+                if (!DemandManualEditing(nameof(RepeatRowLabels))) return;
                 if (SetProperty(ref _repeatRowLabels, value)) MarkSpecificationDirty();
             }
         }
@@ -441,6 +452,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _insertBlankRows;
             set
             {
+                if (!DemandManualEditing(nameof(InsertBlankRows))) return;
                 if (SetProperty(ref _insertBlankRows, value)) MarkSpecificationDirty();
             }
         }
@@ -450,6 +462,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _freezeHeaders;
             set
             {
+                if (!DemandManualEditing(nameof(FreezeHeaders))) return;
                 if (SetProperty(ref _freezeHeaders, value)) MarkSpecificationDirty();
             }
         }
@@ -459,6 +472,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _showRowGrandTotals;
             set
             {
+                if (!DemandManualEditing(nameof(ShowRowGrandTotals))) return;
                 if (SetProperty(ref _showRowGrandTotals, value)) MarkSpecificationDirty();
             }
         }
@@ -468,6 +482,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _showColumnGrandTotals;
             set
             {
+                if (!DemandManualEditing(nameof(ShowColumnGrandTotals))) return;
                 if (SetProperty(ref _showColumnGrandTotals, value)) MarkSpecificationDirty();
             }
         }
@@ -477,6 +492,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _rowIndent;
             set
             {
+                if (!DemandManualEditing(nameof(RowIndent))) return;
                 int bounded = Math.Max(0, Math.Min(15, value));
                 if (SetProperty(ref _rowIndent, bounded)) MarkSpecificationDirty();
             }
@@ -487,6 +503,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _rowGrandTotalLabel;
             set
             {
+                if (!DemandManualEditing(nameof(RowGrandTotalLabel))) return;
                 if (SetProperty(ref _rowGrandTotalLabel, value ?? string.Empty)) MarkSpecificationDirty();
             }
         }
@@ -496,6 +513,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _columnGrandTotalLabel;
             set
             {
+                if (!DemandManualEditing(nameof(ColumnGrandTotalLabel))) return;
                 if (SetProperty(ref _columnGrandTotalLabel, value ?? string.Empty)) MarkSpecificationDirty();
             }
         }
@@ -505,6 +523,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _selectedPeriodMode;
             set
             {
+                if (!DemandManualEditing(nameof(SelectedPeriodMode))) return;
                 if (SetProperty(ref _selectedPeriodMode, value ?? string.Empty))
                 {
                     ClearWideHeaderPreview(keepReportingYearRequirement: false);
@@ -519,6 +538,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _selectedOutputStyle;
             set
             {
+                if (!DemandManualEditing(nameof(SelectedOutputStyle))) return;
                 if (SetProperty(ref _selectedOutputStyle, value ?? "Dense management block"))
                 {
                     MarkSpecificationDirty();
@@ -531,6 +551,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _selectedPeriodColumn;
             set
             {
+                if (!DemandManualEditing(nameof(SelectedPeriodColumn))) return;
                 if (SetProperty(ref _selectedPeriodColumn, value ?? string.Empty))
                 {
                     InvalidatePeriodMapping();
@@ -543,6 +564,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _headerPattern;
             set
             {
+                if (!DemandManualEditing(nameof(HeaderPattern))) return;
                 if (SetProperty(ref _headerPattern, value ?? string.Empty))
                 {
                     ClearWideHeaderPreview(keepReportingYearRequirement: true);
@@ -556,6 +578,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _reportingYearText;
             set
             {
+                if (!DemandManualEditing(nameof(ReportingYearText))) return;
                 if (SetProperty(ref _reportingYearText, value ?? string.Empty))
                 {
                     ClearWideHeaderPreview(keepReportingYearRequirement: true);
@@ -581,8 +604,16 @@ namespace ExcelReportBuilder.AddIn.Presentation
             get => _endpointBaseUrl;
             set
             {
-                if (SetProperty(ref _endpointBaseUrl, value ?? string.Empty))
+                string next = value ?? string.Empty;
+                string previous = _endpointBaseUrl;
+                if (SetProperty(ref _endpointBaseUrl, next))
                 {
+                    _endpointConfigurationVersion++;
+                    if (!AgentEndpointCredentialScope.Matches(previous, next))
+                    {
+                        ResetEndpointScopedSecurityState(next);
+                    }
+
                     InvalidateEndpointCheck();
                 }
             }
@@ -595,6 +626,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             {
                 if (SetProperty(ref _modelId, value ?? string.Empty))
                 {
+                    _endpointConfigurationVersion++;
                     InvalidateEndpointCheck();
                 }
             }
@@ -607,6 +639,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             {
                 if (SetProperty(ref _allowRemoteHttp, value))
                 {
+                    _endpointConfigurationVersion++;
                     InvalidateEndpointCheck();
                 }
             }
@@ -619,7 +652,8 @@ namespace ExcelReportBuilder.AddIn.Presentation
             {
                 if (SetProperty(ref _allowRemoteWorkbookData, value))
                 {
-                    SendChatCommand.RaiseCanExecuteChanged();
+                    _endpointConfigurationVersion++;
+                    InvalidateEndpointCheck();
                 }
             }
         }
@@ -779,7 +813,8 @@ namespace ExcelReportBuilder.AddIn.Presentation
         public void SetApiKey(SecureString? apiKey)
         {
             _apiKey?.Dispose();
-            _apiKey = apiKey?.Copy();
+            _apiKey = apiKey != null && apiKey.Length > 0 ? apiKey.Copy() : null;
+            _endpointConfigurationVersion++;
             RaisePropertyChanged(nameof(ApiKeyStateLabel));
             InvalidateEndpointCheck();
         }
@@ -982,6 +1017,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
         {
             return parameter is PlacementBucket
                 && SelectedField != null
+                && CanEditManualSpecification
                 && !Activity.IsOperationActive;
         }
 
@@ -1131,7 +1167,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
 
         private bool CanMoveSelectedPlacement(int direction)
         {
-            if (SelectedPlacement == null || Activity.IsOperationActive)
+            if (SelectedPlacement == null || !CanEditManualSpecification || Activity.IsOperationActive)
             {
                 return false;
             }
@@ -1252,6 +1288,18 @@ namespace ExcelReportBuilder.AddIn.Presentation
                             "The guarded agent returned an invalid published result.");
                     }
 
+                    if (_source != null)
+                    {
+                        ApplySource(new SourceSnapshot(
+                            _source.DisplayName,
+                            _source.Location,
+                            _source.RowCount,
+                            _source.Columns,
+                            _source.IsSynthetic,
+                            result.AppliedSpecification,
+                            "Chat-applied report setup. The managed draft remains unpublished."));
+                    }
+
                     _agentAppliedSpecification = result.AppliedSpecification;
                     _hasBuiltDraft = result.HasManagedDraft;
                     _hasRunChecks = result.Checks.Count > 0;
@@ -1278,6 +1326,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
 
                     LastDraftLabel = result.ManagedDraftName + " · " +
                         result.OutputRows.ToString("N0") + " normalized rows · unpublished";
+                    ApplyManualEditingState(result.AppliedSpecification);
                     RaisePublishProperties();
                     if (!_checksPassed)
                     {
@@ -1329,15 +1378,30 @@ namespace ExcelReportBuilder.AddIn.Presentation
                 "Requesting the model list.",
                 "The configured host service owns the network request.");
 
+            long requestedConfigurationVersion = _endpointConfigurationVersion;
+            ModelEndpointSettingsSnapshot requestedSettings = CreateEndpointSettingsSnapshot();
+            bool requestHasApiKey = HasEndpointCredentialFor(requestedSettings.BaseUrl);
             try
             {
                 IReadOnlyList<string> models;
                 using (SecureString? apiKey = CopyApiKey())
                 {
                     models = await _hostService.DiscoverModelsAsync(
-                        CreateEndpointSettingsSnapshot(),
+                        requestedSettings,
                         apiKey,
                         Activity.CancellationToken);
+                }
+
+                if (!TryPersistCurrentEndpointSettings(
+                        requestedConfigurationVersion,
+                        requestedSettings,
+                        requestHasApiKey))
+                {
+                    InvalidateEndpointCheck();
+                    Activity.Complete(
+                        "Endpoint settings changed.",
+                        "The model list response was discarded. Run discovery again for the current settings.");
+                    return;
                 }
 
                 AvailableModels.Clear();
@@ -1393,15 +1457,30 @@ namespace ExcelReportBuilder.AddIn.Presentation
                 "Checking the configured endpoint and model.",
                 "The API key is passed in memory and is never displayed.");
 
+            long requestedConfigurationVersion = _endpointConfigurationVersion;
+            ModelEndpointSettingsSnapshot requestedSettings = CreateEndpointSettingsSnapshot();
+            bool requestHasApiKey = HasEndpointCredentialFor(requestedSettings.BaseUrl);
             try
             {
                 EndpointCheckResult result;
                 using (SecureString? apiKey = CopyApiKey())
                 {
                     result = await _hostService.CheckEndpointAsync(
-                        CreateEndpointSettingsSnapshot(),
+                        requestedSettings,
                         apiKey,
                         Activity.CancellationToken);
+                }
+
+                if (!TryPersistCurrentEndpointSettings(
+                        requestedConfigurationVersion,
+                        requestedSettings,
+                        requestHasApiKey))
+                {
+                    InvalidateEndpointCheck();
+                    Activity.Complete(
+                        "Endpoint settings changed.",
+                        "The check result was discarded. Check the current endpoint again before Chat can send Data.");
+                    return;
                 }
 
                 SetEndpointState(
@@ -1531,6 +1610,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
         {
             if (_source == null
                 || string.IsNullOrWhiteSpace(SelectedPeriodMode)
+                || !CanEditManualSpecification
                 || Activity.IsOperationActive)
             {
                 return false;
@@ -1551,16 +1631,21 @@ namespace ExcelReportBuilder.AddIn.Presentation
             bool yearIsBlank = string.IsNullOrWhiteSpace(ReportingYearText);
             return _source != null
                 && IsWideHeaderMode
+                && CanEditManualSpecification
                 && (yearIsBlank || TryGetReportingYear(out _))
                 && !Activity.IsOperationActive;
         }
 
         private bool CanBuildDraft()
         {
+            bool hasExactCanonicalSetup =
+                _agentAppliedSpecification != null &&
+                _agentAppliedSpecification.HasCanonicalReportSpec;
             return _source != null
                 && _periodMappingConfirmed
-                && Placements.Any(placement => placement.Bucket == PlacementBucket.Rows)
-                && Placements.Any(placement => placement.Bucket == PlacementBucket.Values)
+                && (hasExactCanonicalSetup ||
+                    (Placements.Any(placement => placement.Bucket == PlacementBucket.Rows) &&
+                     Placements.Any(placement => placement.Bucket == PlacementBucket.Values)))
                 && !Activity.IsOperationActive;
         }
 
@@ -1592,6 +1677,9 @@ namespace ExcelReportBuilder.AddIn.Presentation
         private void ApplySource(SourceSnapshot source)
         {
             _source = source;
+            _agentAppliedSpecification = null;
+            _manualProjectionComplete = true;
+            _manualRestrictionMessageShown = false;
             Columns.Clear();
             AvailableFields.Clear();
             Placements.Clear();
@@ -1660,7 +1748,10 @@ namespace ExcelReportBuilder.AddIn.Presentation
 
                 foreach (ManualReportBlockSnapshot block in saved.Blocks)
                 {
-                    ReportBlocks.Add(new ManualReportBlockRule(block.StableId)
+                    ReportBlocks.Add(new ManualReportBlockRule(
+                        block.StableId,
+                        block.CanonicalBlockId,
+                        block.CanonicalOwnershipId)
                     {
                         Title = block.Title,
                         WorksheetName = block.WorksheetName,
@@ -1691,7 +1782,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
                 _rowGrandTotalLabel = saved.Layout.RowGrandTotalLabel;
                 _columnGrandTotalLabel = saved.Layout.ColumnGrandTotalLabel;
 
-                if (ReportBlocks.Count == 0)
+                if (ReportBlocks.Count == 0 && saved.ManualProjectionComplete)
                 {
                     ReportBlocks.Add(new ManualReportBlockRule
                     {
@@ -1778,6 +1869,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
                     ? "Compatible saved report setup restored"
                     : "No managed draft built"
                 : source.SavedReportSetupStatus;
+            ApplyManualEditingState(saved);
         }
 
         private void EnsureSavedFieldIsAvailable(string fieldName)
@@ -1849,6 +1941,75 @@ namespace ExcelReportBuilder.AddIn.Presentation
                     ColumnGrandTotalLabel = ColumnGrandTotalLabel
                 },
                 checks: RequiredChecks.Select(rule => rule.ToSnapshot()).ToArray());
+        }
+
+        public bool CanEditManualSpecification => _manualProjectionComplete;
+
+        public string ManualEditingRestrictionMessage =>
+            "This setup contains settings the manual editor cannot represent exactly. " +
+            "The preview is read-only; rebuild it unchanged or ask Chat for a bounded change.";
+
+        private bool DemandManualEditing(string propertyName)
+        {
+            if (CanEditManualSpecification)
+            {
+                return true;
+            }
+
+            ShowManualEditingRestriction();
+            RaisePropertyChanged(propertyName);
+            return false;
+        }
+
+        private void ShowManualEditingRestriction()
+        {
+            string message = ManualEditingRestrictionMessage;
+            LastDraftLabel = message;
+            if (!_manualRestrictionMessageShown)
+            {
+                ChatLines.Add(new ChatLine("Builder", message));
+                _manualRestrictionMessageShown = true;
+            }
+
+            RefreshCommandStates();
+        }
+
+        private void ApplyManualEditingState(ReportSpecificationSnapshot? snapshot)
+        {
+            _applyingManualEditingState = true;
+            try
+            {
+                _manualProjectionComplete = snapshot == null || snapshot.ManualProjectionComplete;
+                RaisePropertyChanged(nameof(CanEditManualSpecification));
+                RaisePropertyChanged(nameof(ManualEditingRestrictionMessage));
+                _manualRestrictionMessageShown = false;
+                bool isReadOnly = !_manualProjectionComplete;
+                foreach (FieldPlacement placement in Placements)
+                {
+                    placement.IsReadOnly = isReadOnly;
+                }
+
+                foreach (ManualEditableObject rule in TransformRules.Cast<ManualEditableObject>()
+                             .Concat(CalculatedMetrics)
+                             .Concat(ReportBlocks)
+                             .Concat(RequiredChecks))
+                {
+                    rule.IsReadOnly = isReadOnly;
+                }
+
+                if (isReadOnly)
+                {
+                    ShowManualEditingRestriction();
+                }
+                else
+                {
+                    RefreshCommandStates();
+                }
+            }
+            finally
+            {
+                _applyingManualEditingState = false;
+            }
         }
 
         private void InvalidatePeriodMapping()
@@ -1935,6 +2096,80 @@ namespace ExcelReportBuilder.AddIn.Presentation
             return true;
         }
 
+        private void ResetEndpointScopedSecurityState(string nextBaseUrl)
+        {
+            _apiKey?.Dispose();
+            _apiKey = null;
+            _savedApiKeyAvailable = _savedCredentialHasProtectedKey &&
+                _savedCredentialBaseUrl != null &&
+                AgentEndpointCredentialScope.Matches(
+                    _savedCredentialBaseUrl,
+                    nextBaseUrl);
+
+            if (_allowRemoteHttp)
+            {
+                _allowRemoteHttp = false;
+                RaisePropertyChanged(nameof(AllowRemoteHttp));
+            }
+
+            if (_allowRemoteWorkbookData)
+            {
+                _allowRemoteWorkbookData = false;
+                RaisePropertyChanged(nameof(AllowRemoteWorkbookData));
+            }
+
+            RaisePropertyChanged(nameof(ApiKeyStateLabel));
+            ApiKeyClearRequested?.Invoke(this, EventArgs.Empty);
+        }
+
+        private bool HasEndpointCredentialFor(string baseUrl)
+        {
+            return (_apiKey != null && _apiKey.Length > 0) ||
+                (_savedCredentialHasProtectedKey &&
+                 _savedCredentialBaseUrl != null &&
+                 AgentEndpointCredentialScope.Matches(_savedCredentialBaseUrl, baseUrl));
+        }
+
+        private void RecordPersistedEndpoint(string baseUrl, bool hasProtectedKey)
+        {
+            _savedCredentialBaseUrl = baseUrl;
+            _savedCredentialHasProtectedKey = hasProtectedKey;
+            _savedApiKeyAvailable = hasProtectedKey &&
+                AgentEndpointCredentialScope.Matches(baseUrl, EndpointBaseUrl);
+            RaisePropertyChanged(nameof(ApiKeyStateLabel));
+        }
+
+        private bool TryPersistCurrentEndpointSettings(
+            long requestedConfigurationVersion,
+            ModelEndpointSettingsSnapshot requestedSettings,
+            bool requestHasApiKey)
+        {
+            if (requestedConfigurationVersion != _endpointConfigurationVersion)
+            {
+                return false;
+            }
+
+            // This is a bounded local DPAPI and file operation. Complete it without
+            // yielding so UI-bound endpoint edits cannot interleave after the version gate.
+            using (SecureString? apiKey = CopyApiKey())
+            {
+                _hostService.PersistEndpointSettingsAsync(
+                        requestedSettings,
+                        apiKey,
+                        Activity.CancellationToken)
+                    .GetAwaiter()
+                    .GetResult();
+            }
+
+            if (requestedConfigurationVersion != _endpointConfigurationVersion)
+            {
+                return false;
+            }
+
+            RecordPersistedEndpoint(requestedSettings.BaseUrl, requestHasApiKey);
+            return true;
+        }
+
         private void InvalidateEndpointCheck()
         {
             _endpointCheckPassed = false;
@@ -1963,6 +2198,17 @@ namespace ExcelReportBuilder.AddIn.Presentation
 
         private void MarkSpecificationDirty()
         {
+            if (_applyingManualEditingState)
+            {
+                return;
+            }
+
+            if (!CanEditManualSpecification && _agentAppliedSpecification != null)
+            {
+                ShowManualEditingRestriction();
+                return;
+            }
+
             _agentAppliedSpecification = null;
             _hasBuiltDraft = false;
             _hasRunChecks = false;

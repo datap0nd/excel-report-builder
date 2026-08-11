@@ -51,6 +51,83 @@ public sealed class WidePeriodNormalizerTests
     }
 
     [Fact]
+    public void Wide_month_normalization_preserves_a_blank_cell_as_a_canonical_row()
+    {
+        var mapping = new PeriodMappingSpec
+        {
+            Kind = PeriodMappingKind.MonthHeaders,
+            ReportingYear = 2026,
+            KeyColumns = { "Region" },
+            Columns =
+            {
+                Map("Jan", 1, null),
+                Map("Feb", 2, null)
+            }
+        };
+        var source = new IReadOnlyDictionary<string, object?>[]
+        {
+            new Dictionary<string, object?>
+            {
+                ["Region"] = "North",
+                ["Jan"] = null,
+                ["Feb"] = 12m
+            }
+        };
+
+        var normalized = WidePeriodNormalizer.Normalize(source, mapping);
+
+        Assert.Equal(2, normalized.Count);
+        NormalizedPeriodValue january = Assert.Single(
+            normalized,
+            row => row.SourceColumn == "Jan");
+        Assert.Equal(new DateTime(2026, 1, 1), january.Period);
+        Assert.Null(january.Value);
+        Assert.Equal("North", january.Keys["Region"]);
+        Assert.Equal(12m, normalized.Where(row => row.Value != null).Sum(row => (decimal)row.Value!));
+    }
+
+    [Fact]
+    public void Metric_month_normalization_keeps_blank_cells_in_the_multi_metric_matrix()
+    {
+        var mapping = new PeriodMappingSpec
+        {
+            Kind = PeriodMappingKind.MetricMonthHeaders,
+            ReportingYear = 2026,
+            KeyColumns = { "Region" },
+            Columns =
+            {
+                Map("Revenue Jan", 1, "Revenue"),
+                Map("Cost Jan", 1, "Cost"),
+                Map("Revenue Feb", 2, "Revenue"),
+                Map("Cost Feb", 2, "Cost")
+            }
+        };
+        var source = new IReadOnlyDictionary<string, object?>[]
+        {
+            new Dictionary<string, object?>
+            {
+                ["Region"] = "North",
+                ["Revenue Jan"] = 10m,
+                ["Cost Jan"] = null,
+                ["Revenue Feb"] = 11m,
+                ["Cost Feb"] = 5m
+            }
+        };
+
+        var normalized = WidePeriodNormalizer.Normalize(source, mapping);
+
+        Assert.Equal(4, normalized.Count);
+        Assert.Equal(2, normalized.Count(row => row.Metric == "Revenue"));
+        Assert.Equal(2, normalized.Count(row => row.Metric == "Cost"));
+        NormalizedPeriodValue blankCost = Assert.Single(
+            normalized,
+            row => row.SourceColumn == "Cost Jan");
+        Assert.Equal("Cost", blankCost.Metric);
+        Assert.Null(blankCost.Value);
+        Assert.Equal(26m, normalized.Where(row => row.Value != null).Sum(row => (decimal)row.Value!));
+    }
+
+    [Fact]
     public void Missing_year_is_never_inferred()
     {
         var mapping = new PeriodMappingSpec

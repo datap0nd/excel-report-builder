@@ -3,12 +3,11 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
 using System.Linq;
-using System.Security.Cryptography;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using ExcelReportBuilder.Agent.Models;
 using ExcelReportBuilder.Agent.Protocol;
+using ExcelReportBuilder.Agent.Security;
 using ExcelReportBuilder.Agent.Tools;
 using ExcelReportBuilder.Agent.Validation;
 
@@ -20,7 +19,6 @@ namespace ExcelReportBuilder.AddIn.Host
     /// </summary>
     internal sealed class AgentWorkerClient : IDisposable
     {
-        private const string PipePrefix = "excel-report-builder-";
         private readonly Func<AgentProgressEvent, CancellationToken, Task> _progress;
         private readonly Func<AgentCheckpointEvent, CancellationToken, Task> _checkpoint;
         private readonly Func<HostToolRequestEvent, CancellationToken, Task<HostToolResultRequest>> _hostTool;
@@ -47,10 +45,9 @@ namespace ExcelReportBuilder.AddIn.Host
             }
 
             ThrowIfDisposed();
-            string pipeName = CreatePipeName();
-            using (var pipe = await ConnectAsync(pipeName, cancellationToken).ConfigureAwait(false))
+            using (var pipe = await ConnectAuthenticatedAsync(
+                cancellationToken).ConfigureAwait(false))
             {
-                await HandshakeAsync(pipe, cancellationToken).ConfigureAwait(false);
                 await ApplyResumeMetadataAsync(pipe, request, cancellationToken).ConfigureAwait(false);
                 await PipeJsonProtocol.WriteAsync(
                     pipe,
@@ -69,6 +66,36 @@ namespace ExcelReportBuilder.AddIn.Host
                     await TryCancelAsync(pipe, request.JobId).ConfigureAwait(false);
                     throw;
                 }
+            }
+        }
+
+        private async Task<NamedPipeClientStream> ConnectAuthenticatedAsync(
+            CancellationToken cancellationToken)
+        {
+            string pipeName = WorkerHandshakeAuthenticator.CreatePipeName();
+            string handshakeSecret = WorkerHandshakeAuthenticator.CreateSecret();
+            NamedPipeClientStream? pipe = null;
+            try
+            {
+                pipe = await ConnectAsync(
+                    pipeName,
+                    handshakeSecret,
+                    cancellationToken).ConfigureAwait(false);
+                await HandshakeAsync(
+                    pipe,
+                    pipeName,
+                    handshakeSecret,
+                    cancellationToken).ConfigureAwait(false);
+                return pipe;
+            }
+            catch
+            {
+                pipe?.Dispose();
+                throw;
+            }
+            finally
+            {
+                handshakeSecret = string.Empty;
             }
         }
 
@@ -106,21 +133,9 @@ namespace ExcelReportBuilder.AddIn.Host
 
         private async Task<NamedPipeClientStream> ConnectAsync(
             string pipeName,
+            string handshakeSecret,
             CancellationToken cancellationToken)
         {
-            var pipe = CreatePipe(pipeName);
-            try
-            {
-                await pipe.ConnectAsync(300, cancellationToken).ConfigureAwait(false);
-                return pipe;
-            }
-            catch (Exception exception) when (
-                exception is IOException ||
-                exception is TimeoutException)
-            {
-                pipe.Dispose();
-            }
-
             string workerPath = FindWorkerPath();
             var startInfo = new ProcessStartInfo
             {
@@ -131,10 +146,20 @@ namespace ExcelReportBuilder.AddIn.Host
                 CreateNoWindow = true,
                 WindowStyle = ProcessWindowStyle.Hidden
             };
-            _ownedWorker = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("The guarded AI worker could not be started.");
+            startInfo.EnvironmentVariables[
+                WorkerHandshakeAuthenticator.SecretEnvironmentVariable] = handshakeSecret;
+            try
+            {
+                _ownedWorker = Process.Start(startInfo)
+                    ?? throw new InvalidOperationException("The guarded AI worker could not be started.");
+            }
+            finally
+            {
+                startInfo.EnvironmentVariables.Remove(
+                    WorkerHandshakeAuthenticator.SecretEnvironmentVariable);
+            }
 
-            pipe = CreatePipe(pipeName);
+            var pipe = CreatePipe(pipeName);
             try
             {
                 await pipe.ConnectAsync(10000, cancellationToken).ConfigureAwait(false);
@@ -158,9 +183,12 @@ namespace ExcelReportBuilder.AddIn.Host
 
         private static async Task HandshakeAsync(
             Stream pipe,
+            string pipeName,
+            string handshakeSecret,
             CancellationToken cancellationToken)
         {
             string correlationId = "hello_" + Guid.NewGuid().ToString("N");
+            string clientNonce = WorkerHandshakeAuthenticator.CreateNonce();
             await PipeJsonProtocol.WriteAsync(
                 pipe,
                 AgentProtocol.Create(
@@ -172,7 +200,8 @@ namespace ExcelReportBuilder.AddIn.Host
                         SupportedProtocolVersions = new System.Collections.Generic.List<string>
                         {
                             AgentProtocol.Version
-                        }
+                        },
+                        ClientNonce = clientNonce
                     }),
                 cancellationToken).ConfigureAwait(false);
 
@@ -194,6 +223,24 @@ namespace ExcelReportBuilder.AddIn.Host
                 StringComparison.Ordinal))
             {
                 throw new AgentProtocolException("The worker selected an unsupported protocol version.");
+            }
+
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT &&
+                !acknowledgement.CurrentUserOnlyPipe)
+            {
+                throw new AgentProtocolException(
+                    "The worker did not create a current-user-only connection.");
+            }
+
+            if (!WorkerHandshakeAuthenticator.VerifyAuthenticationTag(
+                    handshakeSecret,
+                    pipeName,
+                    clientNonce,
+                    acknowledgement.ProtocolVersion,
+                    acknowledgement.AuthenticationTag))
+            {
+                throw new AgentProtocolException(
+                    "The worker did not prove that it was launched by this add-in session.");
             }
         }
 
@@ -375,27 +422,6 @@ namespace ExcelReportBuilder.AddIn.Host
                     exception is ObjectDisposedException)
                 {
                 }
-            }
-        }
-
-        private static string CreatePipeName()
-        {
-            byte[] input = Encoding.UTF8.GetBytes(Environment.UserName ?? string.Empty);
-            byte[] hash;
-            using (var sha = SHA256.Create())
-            {
-                hash = sha.ComputeHash(input);
-            }
-
-            try
-            {
-                var suffix = string.Concat(hash.Take(12).Select(value => value.ToString("x2")));
-                return PipePrefix + suffix;
-            }
-            finally
-            {
-                Array.Clear(input, 0, input.Length);
-                Array.Clear(hash, 0, hash.Length);
             }
         }
 

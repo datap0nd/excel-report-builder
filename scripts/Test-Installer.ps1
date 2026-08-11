@@ -2,7 +2,9 @@
 param(
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
-    [string]$InstallerPath
+    [string]$InstallerPath,
+
+    [string[]]$PublishedWorkerPaths = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -119,6 +121,15 @@ function Invoke-WorkerHandshakeSmoke {
     param([Parameter(Mandatory = $true)][string]$WorkerPath)
 
     $pipeName = "excel-report-builder-installer-" + [Guid]::NewGuid().ToString("N")
+    $secretBytes = [byte[]]::new(32)
+    $random = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $random.GetBytes($secretBytes)
+    }
+    finally {
+        $random.Dispose()
+    }
+    $handshakeSecret = [Convert]::ToBase64String($secretBytes)
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $WorkerPath
     $startInfo.Arguments = "--pipe `"$pipeName`""
@@ -126,14 +137,19 @@ function Invoke-WorkerHandshakeSmoke {
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardError = $true
+    $startInfo.EnvironmentVariables[
+        "EXCEL_REPORT_BUILDER_WORKER_HANDSHAKE_SECRET"] = $handshakeSecret
 
     $workerProcess = [Diagnostics.Process]::new()
     $workerProcess.StartInfo = $startInfo
     if (-not $workerProcess.Start()) {
         throw "The installed worker could not be started."
     }
+    [void]$startInfo.EnvironmentVariables.Remove(
+        "EXCEL_REPORT_BUILDER_WORKER_HANDSHAKE_SECRET")
 
     $pipe = $null
+    $handshakeCompleted = $false
     try {
         $pipe = [IO.Pipes.NamedPipeClientStream]::new(
             ".",
@@ -145,13 +161,23 @@ function Invoke-WorkerHandshakeSmoke {
         $pipe.WriteTimeout = 10000
 
         $correlationId = "installer-smoke"
+        $nonceBytes = [byte[]]::new(32)
+        $random = [Security.Cryptography.RandomNumberGenerator]::Create()
+        try {
+            $random.GetBytes($nonceBytes)
+        }
+        finally {
+            $random.Dispose()
+        }
+        $clientNonce = [Convert]::ToBase64String($nonceBytes)
         $request = [ordered]@{
-            protocolVersion = "1.0"
+            protocolVersion = "1.1"
             messageType = "hello"
             correlationId = $correlationId
             payload = [ordered]@{
                 clientName = "installer-smoke"
-                supportedProtocolVersions = @("1.0")
+                supportedProtocolVersions = @("1.1")
+                clientNonce = $clientNonce
             }
         }
         $json = $request | ConvertTo-Json -Depth 6 -Compress
@@ -172,15 +198,46 @@ function Invoke-WorkerHandshakeSmoke {
         Read-ExactBytes -Stream $pipe -Buffer $responseFrame
         $response = [Text.Encoding]::UTF8.GetString($responseFrame) | ConvertFrom-Json
 
-        if ($response.protocolVersion -ne "1.0" -or
+        if ($response.protocolVersion -ne "1.1" -or
             $response.messageType -ne "helloAcknowledged" -or
             $response.correlationId -ne $correlationId) {
             throw "The installed worker returned an invalid handshake response."
         }
-        if ($response.payload.protocolVersion -ne "1.0" -or
+        if ($response.payload.protocolVersion -ne "1.1" -or
             -not $response.payload.currentUserOnlyPipe) {
             throw "The installed worker did not confirm a current-user-only pipe."
         }
+
+        $proofInput = "excel-report-builder-worker-handshake-v1`n" +
+            $pipeName + "`n" + $clientNonce + "`n1.1"
+        $proofBytes = [Text.Encoding]::UTF8.GetBytes($proofInput)
+        $hmac = [Security.Cryptography.HMACSHA256]::new($secretBytes)
+        try {
+            $expectedTag = $hmac.ComputeHash($proofBytes)
+        }
+        finally {
+            $hmac.Dispose()
+            [Array]::Clear($proofBytes, 0, $proofBytes.Length)
+        }
+        try {
+            $actualTag = [Convert]::FromBase64String(
+                [string]$response.payload.authenticationTag)
+        }
+        catch {
+            throw "The installed worker returned an invalid launch proof."
+        }
+        $difference = $expectedTag.Length -bxor $actualTag.Length
+        if ($expectedTag.Length -eq $actualTag.Length) {
+            for ($index = 0; $index -lt $expectedTag.Length; $index++) {
+                $difference = $difference -bor ($expectedTag[$index] -bxor $actualTag[$index])
+            }
+        }
+        [Array]::Clear($expectedTag, 0, $expectedTag.Length)
+        [Array]::Clear($actualTag, 0, $actualTag.Length)
+        if ($difference -ne 0) {
+            throw "The installed worker did not prove it was launched by this installer test."
+        }
+        $handshakeCompleted = $true
     }
     catch {
         $diagnostic = if ($workerProcess.HasExited) {
@@ -197,10 +254,56 @@ function Invoke-WorkerHandshakeSmoke {
     finally {
         if ($null -ne $pipe) { $pipe.Dispose() }
         if (-not $workerProcess.HasExited) {
-            $workerProcess.Kill()
-            $workerProcess.WaitForExit(5000) | Out-Null
+            if (-not $workerProcess.WaitForExit(5000)) {
+                $workerProcess.Kill()
+                $workerProcess.WaitForExit(5000) | Out-Null
+                if ($handshakeCompleted) {
+                    throw "The installed worker did not exit after its one authenticated connection."
+                }
+            }
+        }
+        if ($handshakeCompleted -and $workerProcess.ExitCode -ne 0) {
+            throw "The installed worker exited with code $($workerProcess.ExitCode) after a valid handshake."
         }
         $workerProcess.Dispose()
+        [Array]::Clear($secretBytes, 0, $secretBytes.Length)
+        if ($null -ne (Get-Variable nonceBytes -ErrorAction SilentlyContinue)) {
+            [Array]::Clear($nonceBytes, 0, $nonceBytes.Length)
+        }
+    }
+
+    $rejectedPipeName = "excel-report-builder-installer-reject-" +
+        [Guid]::NewGuid().ToString("N")
+    $rejectedStartInfo = [Diagnostics.ProcessStartInfo]::new()
+    $rejectedStartInfo.FileName = $WorkerPath
+    $rejectedStartInfo.Arguments = "--pipe `"$rejectedPipeName`""
+    $rejectedStartInfo.WorkingDirectory = [IO.Path]::GetDirectoryName($WorkerPath)
+    $rejectedStartInfo.UseShellExecute = $false
+    $rejectedStartInfo.CreateNoWindow = $true
+    $rejectedStartInfo.RedirectStandardError = $true
+    [void]$rejectedStartInfo.EnvironmentVariables.Remove(
+        "EXCEL_REPORT_BUILDER_WORKER_HANDSHAKE_SECRET")
+    $rejectedProcess = [Diagnostics.Process]::new()
+    $rejectedProcess.StartInfo = $rejectedStartInfo
+    try {
+        if (-not $rejectedProcess.Start()) {
+            throw "The installed worker could not be started for the fail-closed test."
+        }
+        if (-not $rejectedProcess.WaitForExit(5000)) {
+            $rejectedProcess.Kill()
+            $rejectedProcess.WaitForExit(5000) | Out-Null
+            throw "The worker did not reject a launch without authentication."
+        }
+        if ($rejectedProcess.ExitCode -eq 0) {
+            throw "The worker accepted a launch without authentication."
+        }
+    }
+    finally {
+        if (-not $rejectedProcess.HasExited) {
+            $rejectedProcess.Kill()
+            $rejectedProcess.WaitForExit(5000) | Out-Null
+        }
+        $rejectedProcess.Dispose()
     }
 }
 
@@ -239,6 +342,33 @@ function Assert-RegistrationRemoved {
 $frameworkRelease = Get-DotNetFrameworkRelease
 if ($frameworkRelease -lt 528040) {
     throw ".NET Framework 4.8 or newer is required for the installation smoke test."
+}
+
+$publishedWorkerMachines = @()
+foreach ($publishedWorkerPath in $PublishedWorkerPaths) {
+    $resolvedPublishedWorker = (Resolve-Path $publishedWorkerPath).Path
+    $publishedWorkerMachine = Get-PeMachine -Path $resolvedPublishedWorker
+    if ($publishedWorkerMachine -notin @(0x014C, 0x8664)) {
+        throw ("Published worker has unsupported machine type 0x{0:X4}: {1}" -f
+            $publishedWorkerMachine,
+            $publishedWorkerPath)
+    }
+    if ($publishedWorkerMachines -contains $publishedWorkerMachine) {
+        throw ("Published worker coverage contains duplicate machine type 0x{0:X4}." -f
+            $publishedWorkerMachine)
+    }
+
+    $publishedWorkerMachines += $publishedWorkerMachine
+    Invoke-WorkerHandshakeSmoke -WorkerPath $resolvedPublishedWorker
+}
+
+if ($PublishedWorkerPaths.Count -gt 0) {
+    foreach ($requiredMachine in @(0x014C, 0x8664)) {
+        if ($publishedWorkerMachines -notcontains $requiredMachine) {
+            throw ("Published worker smoke coverage is missing machine type 0x{0:X4}." -f
+                $requiredMachine)
+        }
+    }
 }
 
 $resolvedInstaller = (Resolve-Path $InstallerPath).Path

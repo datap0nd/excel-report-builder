@@ -25,4 +25,21 @@ namespace ExcelReportBuilder.AddIn.Presentation
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
     }
+
+    /// <summary>
+    /// Lets a canonical report setup expose a bounded preview without allowing
+    /// controls that cannot represent the full setup to mutate that preview.
+    /// </summary>
+    public abstract class ManualEditableObject : ObservableObject
+    {
+        private bool _isReadOnly;
+
+        public bool IsReadOnly
+        {
+            get => _isReadOnly;
+            set => SetProperty(ref _isReadOnly, value);
+        }
+
+        protected bool CanEdit => !_isReadOnly;
+    }
 }

@@ -1076,6 +1076,15 @@ namespace ExcelReportBuilder.Core.Validation
                     "Division must produce a decimal-number column.");
             }
 
+            if (arithmetic.Operator == ArithmeticOperator.Divide
+                && !arithmetic.ReturnNullOnZeroDenominator)
+            {
+                result.AddError(
+                    "ARITHMETIC_DIVIDE_NULL_ON_ZERO_REQUIRED",
+                    path + ".returnNullOnZeroDenominator",
+                    "Division must return blank when the denominator is zero.");
+            }
+
             ValidateArithmeticOperand(arithmetic.Left, fields, path + ".left", result);
             ValidateArithmeticOperand(arithmetic.Right, fields, path + ".right", result);
             if (arithmetic.Operator == ArithmeticOperator.Divide
@@ -3298,7 +3307,24 @@ namespace ExcelReportBuilder.Core.Validation
             string path,
             ValidationResult result)
         {
-            if (fields != null && !string.IsNullOrWhiteSpace(column) && !fields.Contains(column!))
+            if (fields == null || string.IsNullOrWhiteSpace(column))
+            {
+                return;
+            }
+
+            if (fields.Any(field => string.Equals(field, column, StringComparison.Ordinal)))
+            {
+                return;
+            }
+
+            if (fields.Contains(column!))
+            {
+                result.AddError(
+                    "SOURCE_FIELD_CASE_MISMATCH",
+                    path,
+                    "The column reference '" + column + "' does not match the source column's letter casing.");
+            }
+            else
             {
                 result.AddError("SOURCE_FIELD_UNKNOWN", path, "The column '" + column + "' is not available at this step.");
             }
@@ -3310,7 +3336,25 @@ namespace ExcelReportBuilder.Core.Validation
             string path,
             ValidationResult result)
         {
-            if (sourceProfile != null && !string.IsNullOrWhiteSpace(column) && sourceProfile.FindColumn(column!) == null)
+            if (sourceProfile == null || string.IsNullOrWhiteSpace(column))
+            {
+                return;
+            }
+
+            if (sourceProfile.Columns.Any(profileColumn =>
+                    string.Equals(profileColumn.Name, column, StringComparison.Ordinal)))
+            {
+                return;
+            }
+
+            if (sourceProfile.FindColumn(column!) != null)
+            {
+                result.AddError(
+                    "SOURCE_FIELD_CASE_MISMATCH",
+                    path,
+                    "The column reference '" + column + "' does not match the source column's letter casing.");
+            }
+            else
             {
                 result.AddError("SOURCE_FIELD_UNKNOWN", path, "The source does not contain column '" + column + "'.");
             }

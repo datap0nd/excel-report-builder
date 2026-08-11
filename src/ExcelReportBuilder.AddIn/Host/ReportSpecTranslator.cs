@@ -15,6 +15,7 @@ namespace ExcelReportBuilder.AddIn.Host
     internal sealed class ReportSpecTranslator
     {
         private const int MaximumCanonicalSnapshotCharacters = 512 * 1024;
+        private const int MaximumManualBlocks = 8;
 
         public ReportSpecificationSnapshot ToAppliedAgentSnapshot(ReportSpecV1 specification)
         {
@@ -110,7 +111,13 @@ namespace ExcelReportBuilder.AddIn.Host
                 firstBlock == null
                     ? "Dense management block"
                     : ToUiOutputStyle(firstBlock.OutputMode),
-                canonical);
+                canonical,
+                blocks: ToManualBlocks(specification.Blocks),
+                layout: firstBlock == null
+                    ? new ManualLayoutSnapshot()
+                    : ToManualLayout(firstBlock),
+                checks: ToManualChecks(specification.Checks),
+                manualProjectionComplete: false);
         }
 
         public ReportSpecificationSnapshot ToUi(ReportSpecV1 specification)
@@ -124,82 +131,47 @@ namespace ExcelReportBuilder.AddIn.Host
                 throw new NotSupportedException("Unknown report specification version.");
             }
 
-            if (specification.Blocks.Count != 1)
+            if (specification.Blocks.Count < 1 ||
+                specification.Blocks.Count > MaximumManualBlocks)
             {
                 throw new InvalidOperationException(
-                    "The saved setup cannot be represented by the bounded manual builder because it contains multiple report blocks.");
+                    "The saved setup cannot be represented by the bounded manual builder because it must contain between one and eight report blocks.");
             }
 
             EnsureTransformsCanRoundTrip(specification);
             ReportBlockSpec block = specification.Blocks[0];
-            if (block.PeriodSlices.Count != 0 || block.Headers.Count != 0 || block.Spacers.Count != 0 ||
-                specification.Checks.Count != 0 ||
-                !HasDefaultManualPresentation(specification, block))
-            {
-                throw new InvalidOperationException(
-                    "The saved setup uses advanced layout features that the bounded manual builder cannot safely edit.");
-            }
-
-            var placements = new List<FieldPlacementSnapshot>();
-            foreach (FieldPlacementSpec row in block.Layout.Rows)
-            {
-                placements.Add(ToUiFieldPlacement(PlacementBucket.Rows, row));
-            }
-
-            foreach (FieldPlacementSpec column in block.Layout.Columns)
-            {
-                placements.Add(ToUiFieldPlacement(PlacementBucket.Columns, column));
-            }
-
             var measures = specification.Measures.ToDictionary(
                 measure => measure.Id,
                 StringComparer.OrdinalIgnoreCase);
-            foreach (ValuePlacementSpec value in block.Layout.Values)
+            IReadOnlyList<FieldPlacementSnapshot> placements = ProjectManualPlacements(
+                specification,
+                block,
+                measures);
+            ManualLayoutSnapshot layout = ToManualLayout(block);
+            for (var index = 1; index < specification.Blocks.Count; index++)
             {
-                if (value.PeriodSliceIds.Count != 0 || !string.IsNullOrWhiteSpace(value.StyleId) ||
-                    !measures.TryGetValue(value.MeasureId, out MeasureDefinition? measure) ||
-                    !(measure.Expression is AggregateMeasureExpression aggregate) ||
-                    !string.IsNullOrWhiteSpace(aggregate.PeriodSliceId) ||
-                    !string.Equals(value.Caption, measure.Label, StringComparison.Ordinal) ||
-                    !string.Equals(value.NumberFormat, measure.NumberFormat, StringComparison.Ordinal) ||
-                    !IsManualAggregateMeasure(measure, aggregate))
+                ReportBlockSpec candidate = specification.Blocks[index];
+                IReadOnlyList<FieldPlacementSnapshot> candidatePlacements = ProjectManualPlacements(
+                    specification,
+                    candidate,
+                    measures);
+                if (candidate.OutputMode != block.OutputMode ||
+                    !ManualPlacementsEqual(placements, candidatePlacements) ||
+                    !ValueMeasureOrderEqual(block.Layout.Values, candidate.Layout.Values) ||
+                    !ManualLayoutsEqual(layout, ToManualLayout(candidate)))
                 {
                     throw new InvalidOperationException(
-                        "The saved setup contains a calculated or sliced Value that the bounded manual builder cannot safely edit.");
+                        "The saved setup contains report blocks with different Rows, Columns, Values, Filters, output styles, or layout settings. The bounded manual builder can edit multiple blocks only when those shared settings are identical.");
                 }
-
-                placements.Add(new FieldPlacementSnapshot(
-                    PlacementBucket.Values,
-                    aggregate.Field,
-                    ToUiAggregate(aggregate.Function),
-                    numberFormat: measure.NumberFormat ?? "General"));
-            }
-
-            foreach (FilterPlacementSpec filter in block.Layout.Filters)
-            {
-                if (filter.IncludeBlank || filter.SelectedValues.Any(value =>
-                        value.Kind != ScalarValueKind.Text ||
-                        value.Text == null ||
-                        value.Text.Contains(";")))
-                {
-                    throw new InvalidOperationException(
-                        "The saved setup contains a Filter that the bounded manual builder cannot safely edit.");
-                }
-
-                string[] selectedValues = filter.SelectedValues
-                    .Select(value => value.Text!)
-                    .ToArray();
-                placements.Add(new FieldPlacementSnapshot(
-                    PlacementBucket.Filters,
-                    filter.Field,
-                    selectedValues.Length == 0 ? "All" : string.Join("; ", selectedValues),
-                    selectedValues: selectedValues));
             }
 
             return new ReportSpecificationSnapshot(
                 ToUiPeriodMapping(specification.PeriodMapping),
                 placements,
-                ToUiOutputStyle(block.OutputMode));
+                ToUiOutputStyle(block.OutputMode),
+                blocks: ToManualBlocks(specification.Blocks),
+                layout: layout,
+                checks: ToManualChecks(specification.Checks));
         }
 
         public ReportSpecV1 FromUi(
@@ -1415,6 +1387,160 @@ namespace ExcelReportBuilder.AddIn.Host
                 rows);
         }
 
+        private static IReadOnlyList<FieldPlacementSnapshot> ProjectManualPlacements(
+            ReportSpecV1 specification,
+            ReportBlockSpec block,
+            IReadOnlyDictionary<string, MeasureDefinition> measures)
+        {
+            if (block.PeriodSlices.Count != 0 ||
+                block.Headers.Count != 0 ||
+                block.Spacers.Count != 0 ||
+                !HasSupportedManualPresentation(specification, block))
+            {
+                throw new InvalidOperationException(
+                    "The saved setup uses advanced layout features that the bounded manual builder cannot safely edit.");
+            }
+
+            if (block.Layout.Rows.Count == 0 || block.Layout.Values.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    "The saved setup does not contain the Rows and Values required by the bounded manual builder.");
+            }
+
+            var placements = new List<FieldPlacementSnapshot>();
+            foreach (FieldPlacementSpec row in block.Layout.Rows)
+            {
+                placements.Add(ToUiFieldPlacement(PlacementBucket.Rows, row));
+            }
+
+            foreach (FieldPlacementSpec column in block.Layout.Columns)
+            {
+                placements.Add(ToUiFieldPlacement(PlacementBucket.Columns, column));
+            }
+
+            var usedMeasures = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var expectedMeasureIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var measureIndex = 0;
+            foreach (ValuePlacementSpec value in block.Layout.Values)
+            {
+                if (value.PeriodSliceIds.Count != 0 ||
+                    !string.IsNullOrWhiteSpace(value.StyleId) ||
+                    !measures.TryGetValue(value.MeasureId, out MeasureDefinition? measure) ||
+                    !(measure.Expression is AggregateMeasureExpression aggregate) ||
+                    !string.IsNullOrWhiteSpace(aggregate.PeriodSliceId) ||
+                    !string.Equals(value.Caption, measure.Label, StringComparison.Ordinal) ||
+                    !string.Equals(value.NumberFormat, measure.NumberFormat, StringComparison.Ordinal) ||
+                    !IsManualAggregateMeasure(measure, aggregate) ||
+                    !usedMeasures.Add(measure.Id))
+                {
+                    throw new InvalidOperationException(
+                        "The saved setup contains a calculated, sliced, duplicated, or otherwise unsupported Value that the bounded manual builder cannot safely edit.");
+                }
+
+                string expectedMeasureId = UniqueId(
+                    "measure_" + aggregate.Field,
+                    ++measureIndex,
+                    expectedMeasureIds);
+                if (!string.Equals(measure.Id, expectedMeasureId, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        "The saved setup contains a Value identity that the bounded manual builder cannot preserve exactly.");
+                }
+
+                placements.Add(new FieldPlacementSnapshot(
+                    PlacementBucket.Values,
+                    aggregate.Field,
+                    ToUiAggregate(aggregate.Function),
+                    numberFormat: measure.NumberFormat ?? "General"));
+            }
+
+            if (usedMeasures.Count != measures.Count)
+            {
+                throw new InvalidOperationException(
+                    "The saved setup contains metrics that are not represented by the bounded manual Values editor.");
+            }
+
+            foreach (FilterPlacementSpec filter in block.Layout.Filters)
+            {
+                if (filter.IncludeBlank || filter.SelectedValues.Any(value =>
+                        value.Kind != ScalarValueKind.Text ||
+                        value.Text == null ||
+                        value.Text.Contains(";")))
+                {
+                    throw new InvalidOperationException(
+                        "The saved setup contains a Filter that the bounded manual builder cannot safely edit.");
+                }
+
+                string[] selectedValues = filter.SelectedValues
+                    .Select(value => value.Text!)
+                    .ToArray();
+                placements.Add(new FieldPlacementSnapshot(
+                    PlacementBucket.Filters,
+                    filter.Field,
+                    selectedValues.Length == 0 ? "All" : string.Join("; ", selectedValues),
+                    selectedValues: selectedValues));
+            }
+
+            return placements;
+        }
+
+        private static bool ManualPlacementsEqual(
+            IReadOnlyList<FieldPlacementSnapshot> expected,
+            IReadOnlyList<FieldPlacementSnapshot> actual)
+        {
+            if (expected.Count != actual.Count)
+            {
+                return false;
+            }
+
+            for (var index = 0; index < expected.Count; index++)
+            {
+                FieldPlacementSnapshot left = expected[index];
+                FieldPlacementSnapshot right = actual[index];
+                if (left.Bucket != right.Bucket ||
+                    !string.Equals(left.ColumnName, right.ColumnName, StringComparison.Ordinal) ||
+                    !string.Equals(left.Setting, right.Setting, StringComparison.Ordinal) ||
+                    left.ShowSubtotals != right.ShowSubtotals ||
+                    !left.SelectedValues.SequenceEqual(right.SelectedValues, StringComparer.Ordinal) ||
+                    !string.Equals(left.SubtotalPlacement, right.SubtotalPlacement, StringComparison.Ordinal) ||
+                    !left.MemberOrder.SequenceEqual(right.MemberOrder, StringComparer.Ordinal) ||
+                    !string.Equals(left.NumberFormat, right.NumberFormat, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool ValueMeasureOrderEqual(
+            IReadOnlyList<ValuePlacementSpec> expected,
+            IReadOnlyList<ValuePlacementSpec> actual)
+        {
+            return expected.Select(value => value.MeasureId)
+                .SequenceEqual(actual.Select(value => value.MeasureId), StringComparer.Ordinal);
+        }
+
+        private static bool ManualLayoutsEqual(
+            ManualLayoutSnapshot expected,
+            ManualLayoutSnapshot actual)
+        {
+            return expected.RepeatRowLabels == actual.RepeatRowLabels &&
+                expected.InsertBlankRows == actual.InsertBlankRows &&
+                expected.FreezeHeaders == actual.FreezeHeaders &&
+                expected.ShowRowGrandTotals == actual.ShowRowGrandTotals &&
+                expected.ShowColumnGrandTotals == actual.ShowColumnGrandTotals &&
+                expected.RowIndent == actual.RowIndent &&
+                string.Equals(
+                    expected.RowGrandTotalLabel,
+                    actual.RowGrandTotalLabel,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    expected.ColumnGrandTotalLabel,
+                    actual.ColumnGrandTotalLabel,
+                    StringComparison.Ordinal);
+        }
+
         private static FieldPlacementSnapshot ToUiFieldPlacement(
             PlacementBucket bucket,
             FieldPlacementSpec placement)
@@ -1423,7 +1549,9 @@ namespace ExcelReportBuilder.AddIn.Host
                 placement.GroupBuckets.Count != 0 ||
                 placement.TopN != null ||
                 !string.IsNullOrWhiteSpace(placement.Subtotals.Label) ||
-                !string.IsNullOrWhiteSpace(placement.Subtotals.StyleId))
+                !string.IsNullOrWhiteSpace(placement.Subtotals.StyleId) ||
+                placement.MemberOrder.Any(value =>
+                    value.Kind != ScalarValueKind.Text || value.Text == null))
             {
                 throw new InvalidOperationException(
                     "The saved setup contains advanced field placement settings that the bounded manual builder cannot safely edit.");
@@ -1531,16 +1659,11 @@ namespace ExcelReportBuilder.AddIn.Host
                 string.Equals(numberFormat, "0.00%", StringComparison.Ordinal);
         }
 
-        private static bool HasDefaultManualPresentation(
+        private static bool HasSupportedManualPresentation(
             ReportSpecV1 specification,
             ReportBlockSpec block)
         {
-            if (!string.Equals(block.Title, "Management report", StringComparison.Ordinal) ||
-                !string.Equals(block.WorksheetName, "Report", StringComparison.Ordinal) ||
-                !string.Equals(block.AnchorCell, "A1", StringComparison.OrdinalIgnoreCase) ||
-                block.OwnedExtent.RowCount != 100000 ||
-                block.OwnedExtent.ColumnCount != 512 ||
-                !string.Equals(block.HeaderStyleId, "report_header", StringComparison.Ordinal) ||
+            if (!string.Equals(block.HeaderStyleId, "report_header", StringComparison.Ordinal) ||
                 !string.IsNullOrWhiteSpace(block.BodyStyleId) ||
                 !string.IsNullOrWhiteSpace(block.SubtotalStyleId) ||
                 !string.IsNullOrWhiteSpace(block.GrandTotalStyleId) ||
@@ -1551,18 +1674,10 @@ namespace ExcelReportBuilder.AddIn.Host
 
             DenseLayoutOptions dense = block.Layout.DenseLayout;
             GrandTotalsSpec totals = block.Layout.GrandTotals;
-            if (dense.RepeatRowLabels ||
-                !dense.ShowRowGrandTotals ||
-                !dense.ShowColumnGrandTotals ||
-                dense.InsertBlankRows ||
-                dense.RowIndent != 1 ||
-                !dense.FreezeHeaders ||
-                !totals.ShowRows ||
-                !totals.ShowColumns ||
+            if (dense.ShowRowGrandTotals != totals.ShowRows ||
+                dense.ShowColumnGrandTotals != totals.ShowColumns ||
                 totals.RowPlacement != TotalPlacement.AfterMembers ||
                 totals.ColumnPlacement != TotalPlacement.AfterMembers ||
-                !string.Equals(totals.RowLabel, "Grand Total", StringComparison.Ordinal) ||
-                !string.Equals(totals.ColumnLabel, "Grand Total", StringComparison.Ordinal) ||
                 !string.IsNullOrWhiteSpace(totals.StyleId))
             {
                 return false;
@@ -1579,6 +1694,66 @@ namespace ExcelReportBuilder.AddIn.Host
                 !style.DecimalPlaces.HasValue &&
                 !style.TopBorder &&
                 style.BottomBorder;
+        }
+
+        private static IReadOnlyList<ManualReportBlockSnapshot> ToManualBlocks(
+            IReadOnlyList<ReportBlockSpec> blocks)
+        {
+            return blocks.Select(block => new ManualReportBlockSnapshot(
+                block.Title ?? string.Empty,
+                block.WorksheetName,
+                block.AnchorCell,
+                ToUiOutputStyle(block.OutputMode),
+                stableId: block.Id,
+                ownedRows: block.OwnedExtent.RowCount,
+                ownedColumns: block.OwnedExtent.ColumnCount,
+                canonicalBlockId: block.Id,
+                canonicalOwnershipId: block.OwnershipId)).ToArray();
+        }
+
+        private static ManualLayoutSnapshot ToManualLayout(ReportBlockSpec block)
+        {
+            DenseLayoutOptions dense = block.Layout.DenseLayout;
+            GrandTotalsSpec totals = block.Layout.GrandTotals;
+            return new ManualLayoutSnapshot
+            {
+                RepeatRowLabels = dense.RepeatRowLabels,
+                InsertBlankRows = dense.InsertBlankRows,
+                FreezeHeaders = dense.FreezeHeaders,
+                ShowRowGrandTotals = dense.ShowRowGrandTotals,
+                ShowColumnGrandTotals = dense.ShowColumnGrandTotals,
+                RowIndent = dense.RowIndent,
+                RowGrandTotalLabel = totals.RowLabel,
+                ColumnGrandTotalLabel = totals.ColumnLabel
+            };
+        }
+
+        private static IReadOnlyList<ManualCheckSnapshot> ToManualChecks(
+            IReadOnlyList<ReportCheckSpec> checks)
+        {
+            return checks.Select(check => new ManualCheckSnapshot(
+                ToManualCheckKind(check),
+                check.MeasureId ?? string.Empty,
+                check.ComparedMeasureId ?? string.Empty,
+                check.Tolerance)).ToArray();
+        }
+
+        private static string ToManualCheckKind(ReportCheckSpec check)
+        {
+            switch (check.Kind)
+            {
+                case ReportCheckKind.TotalPreservation:
+                    return check.Id.IndexOf("rendered_output", StringComparison.OrdinalIgnoreCase) >= 0
+                        ? "Rendered output"
+                        : "Total preservation";
+                case ReportCheckKind.NoTruncation: return "No truncation";
+                case ReportCheckKind.RequiredValues: return "Required values";
+                case ReportCheckKind.NonNegative: return "Non-negative";
+                case ReportCheckKind.Balance: return "Balance";
+                default:
+                    throw new InvalidOperationException(
+                        "The saved setup contains a check that the bounded manual builder cannot safely edit.");
+            }
         }
 
         private static void EnsureTransformsCanRoundTrip(ReportSpecV1 specification)

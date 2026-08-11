@@ -23,12 +23,20 @@ details.
   unmanaged object identities.
 - Endpoint credentials are encrypted for the current Windows user and excluded
   from diagnostics.
+- Every agent job launches its own worker on a cryptographically random pipe.
+  A one-time HMAC proof is verified before the add-in sends endpoint credentials,
+  prompts, column names, or workbook samples. The worker accepts one connection
+  and the legitimate pipe is restricted to the current Windows user.
+- Session API keys and remote-data consent are scoped to the exact endpoint.
+  Changing its origin or case-sensitive path clears both and invalidates any
+  in-flight endpoint result.
 - HTTP is accepted automatically only for loopback endpoints. Non-loopback
   plain HTTP requires a persisted explicit warning and opt-in.
 - Query generation is limited to the selected in-workbook source and cannot
   introduce files, URLs, databases, native queries, or credentials.
-- Builds occur on staging objects. Publishing requires a user action and the
-  add-in never saves the workbook automatically.
+- Builds occur on managed drafts. Publishing requires a user action, freezes
+  generated formulas to values, and commits all managed outputs as one
+  compensating transaction. The add-in never saves the workbook automatically.
 
 ## Diagnostic policy
 

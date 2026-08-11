@@ -7,7 +7,7 @@ namespace ExcelReportBuilder.Agent.Protocol;
 
 public static class AgentProtocol
 {
-    public const string Version = "1.0";
+    public const string Version = "1.1";
     public const int MaximumFrameBytes = 1024 * 1024;
 
     internal static JsonSerializerOptions JsonOptions { get; } = CreateJsonOptions();

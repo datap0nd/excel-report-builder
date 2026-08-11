@@ -2,61 +2,76 @@
 
 ## Current Objective
 
-Verify the Windows build and per-user installer from `main`, inspect the
-Windows-rendered task pane, publish the `v0.1.0` unsigned prerelease, and record
-the result. Managed-workstation Excel validation remains separately authorized.
+Publish the hardened `v0.1.0` unsigned prototype from `main`, verify the Windows
+installer and rendered task pane, then record the release evidence. Real Excel
+field validation remains separately authorized.
 
-## Confirmed Decisions
+## Repo State
 
-- This repository is a clean implementation with no imported private source or
-  history.
-- Repository and product name: Excel Report Builder.
-- Windows Excel LTSC 2021 is the primary runtime.
-- One raw extract produces one output; no joins or SQL.
-- One-row month and metric-month normalization is the first functional gate.
-- Large normalized results route to Excel's Data Model without truncation.
-- The agent works only in managed drafts and continuously reports progress.
-- Managed-workstation field testing is out of scope until separately
-  authorized.
+- Path: repository root
+- Branch: `main`
+- Latest published commit before this release batch: `cde179b`
+- Public repo: `datap0nd/excel-report-builder`
+- Push status: the release-hardening batch is verified locally and not yet
+  pushed
 
-## Implemented
+## Decisions Made
 
-- `ReportSpecV1` JSON Schema, strict JSON shape validation, typed transforms,
-  measures, period slices, report blocks, presentation, checks, and ownership.
-- Long and wide period profiling, explicit missing-year rejection,
-  metric-month unpivoting, worksheet versus Data Model routing, and independent
-  canonical-data auditing.
-- Manual preparation, field placement, subtotal/order/format controls,
-  calculated metrics, stable multi-block layout, managed extents, and
-  report-specific checks.
-- Native PivotTables, hidden-pivot dense reports, controlled generated
-  formulas, rebuild idempotency, draft-only mutation, publish approval, and one
-  managed rollback copy.
-- Current-user local worker, restricted named pipe, protected endpoint
-  credentials, guarded tool calls, checkpoints, cancellation, finite repairs,
-  exact specification handoff, and continuous progress with 15-second
-  heartbeats.
-- Pinned Windows build, COM contract, x86/x64 worker packaging, installer smoke
-  test, dependency review, secret scanning, CodeQL, SBOM, checksum, and
-  provenance workflows.
+- The product remains a clean public implementation with generated synthetic
+  fixtures only.
+- The add-in mutates exact managed workbook objects only and never saves a
+  workbook.
+- Full-source transformations are independently evaluated for exact row and
+  additive-total reconciliation. The reference evaluator and generated M share
+  exact-case fields, bounded en-US conversions, null filter behavior, error
+  recovery, numeric period handling, and finite decimal arithmetic.
+- Wide normalization expands one explicit record per mapped cell, including
+  null cells, so projected and actual row counts cannot diverge.
+- Worksheet and Data Model PivotCaches use bounded backend-specific ownership
+  slots. Inactive managed backend objects can remain when Excel-owned caches
+  depend on them.
+- Registry-only ownership is not enough to mutate a live query, workbook name,
+  connection, or PivotTable. Exact content or source contracts must also match.
+- Publishing creates static values and formats. Final and rollback worksheets
+  contain neither formulas nor live PivotTables.
+- Every worker launch uses a random current-user pipe and one-time HMAC proof
+  before endpoint credentials, prompts, or workbook samples are sent.
+- Managed-workstation testing is out of scope until explicitly authorized.
 
-## Verification
+## Files Changed
 
-- Local Release build: clean, zero warnings.
-- Synthetic tests: 295 passing.
-- Dependency vulnerability scan: no vulnerable NuGet packages reported.
-- Impeccable task-pane detector: no findings.
-- Windows workflow, rendered preview, installer execution, and tagged release:
-  pending the first `main` push.
+- `src/ExcelReportBuilder.Excel`: exact source reconciliation, backend routing,
+  PivotCache ownership, output auditing, and transactional static publishing.
+- `src/ExcelReportBuilder.AddIn`: exact saved-setup rebuilding, endpoint-scoped
+  credential state, multi-block manual projection, and task-pane binding fixes.
+- `src/ExcelReportBuilder.Agent` and `src/ExcelReportBuilder.Worker`: authenticated
+  one-use worker transport and endpoint credential scoping.
+- `.github/workflows/windows-build.yml`, `scripts`, and release docs: x86/x64
+  worker smoke tests, complete-payload SBOM validation, release ancestry, and
+  public-safety gates.
+- `tests`: adversarial coverage for every hardened contract.
 
-## Public Safety
+## Commands And Checks
 
-Use only generated synthetic fixtures and generic names. Never commit real
-workbooks, screenshots, data, paths, credentials, endpoints, transcripts, or
-private-repository content.
+- Release solution build: passed with zero warnings.
+- Full synthetic test suite: 484 passed, 0 failed, 0 skipped.
+- NuGet transitive vulnerability scan: no vulnerable packages reported.
+- JSON Schema and XAML parsing: passed.
+- Public identifier, credential, private-artifact, em-dash, and diff checks:
+  passed locally; the complete PowerShell gate will run in Windows CI.
+- The pinned SBOM generator was checked locally against the Release add-in
+  payload and recognized every first-party assembly and required runtime
+  package under the names enforced by CI.
+- Windows build, COM activation, installer, task-pane preview, SBOM, checksum,
+  provenance, and tagged release: not yet run for this unpushed batch.
+
+## Open Questions
+
+- No code blocker is known. Windows CI remains the authoritative check for COM,
+  PowerShell, WPF rendering, Inno Setup, and installed-worker behavior.
 
 ## Next Step
 
-Push `main`, resolve any Windows-only failures, inspect the preview artifact,
-tag `v0.1.0`, verify all release assets, then update this handoff with the
-release evidence.
+Commit and push the scoped release-hardening batch to `origin/main`, then follow
+the Windows and security workflows through completion before creating the
+`v0.1.0` tag.

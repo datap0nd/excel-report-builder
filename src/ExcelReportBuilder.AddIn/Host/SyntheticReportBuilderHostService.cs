@@ -193,6 +193,15 @@ namespace ExcelReportBuilder.AddIn.Host
             return new EndpointCheckResult(true, "Synthetic endpoint settings are valid for shell testing.");
         }
 
+        public Task PersistEndpointSettingsAsync(
+            ModelEndpointSettingsSnapshot endpointSettings,
+            SecureString? apiKey,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
         public async Task<IReadOnlyList<HostCheckResult>> RunChecksAsync(CancellationToken cancellationToken)
         {
             ResetControlState();

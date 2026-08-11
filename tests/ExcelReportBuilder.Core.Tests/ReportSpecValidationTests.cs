@@ -453,6 +453,74 @@ public sealed class ReportSpecValidationTests
             && issue.Severity == ValidationSeverity.Warning);
     }
 
+    [Fact]
+    public void Rejects_case_only_source_field_mismatches()
+    {
+        var spec = SyntheticReportFactory.CreateValidLongSpec();
+        spec.Transforms.Insert(0, new TrimTextTransform
+        {
+            Id = "wrong_case",
+            Columns = { "region" }
+        });
+
+        ValidationResult result = ReportSpecValidator.Validate(
+            spec,
+            SyntheticReportFactory.CreateLongProfile());
+
+        Assert.Contains(result.Issues, issue =>
+            issue.Code == "SOURCE_FIELD_CASE_MISMATCH"
+            && issue.Path.Contains("transforms[0]", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Rejects_case_only_references_to_a_renamed_field()
+    {
+        var spec = SyntheticReportFactory.CreateValidLongSpec();
+        spec.Transforms.Insert(0, new RenameColumnTransform
+        {
+            Id = "rename_amount",
+            From = "Amount",
+            To = "NetAmount"
+        });
+        spec.Transforms.Insert(1, new ChangeColumnTypeTransform
+        {
+            Id = "wrong_case_after_rename",
+            Column = "netamount",
+            DataType = ColumnDataType.DecimalNumber
+        });
+
+        ValidationResult result = ReportSpecValidator.Validate(
+            spec,
+            SyntheticReportFactory.CreateLongProfile());
+
+        Assert.Contains(result.Issues, issue =>
+            issue.Code == "SOURCE_FIELD_CASE_MISMATCH"
+            && issue.Path.Contains("transforms[1]", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Rejects_division_when_null_on_zero_is_disabled()
+    {
+        var spec = SyntheticReportFactory.CreateValidLongSpec();
+        spec.Transforms.Add(new AddArithmeticColumnTransform
+        {
+            Id = "unsafe_divide",
+            OutputColumn = "UnsafeRate",
+            Operator = ArithmeticOperator.Divide,
+            Left = new ArithmeticOperand { Kind = ArithmeticOperandKind.Column, Column = "Amount" },
+            Right = new ArithmeticOperand { Kind = ArithmeticOperandKind.Column, Column = "Units" },
+            ResultType = ColumnDataType.DecimalNumber,
+            ReturnNullOnZeroDenominator = false
+        });
+
+        ValidationResult result = ReportSpecValidator.Validate(
+            spec,
+            SyntheticReportFactory.CreateLongProfile());
+
+        Assert.Contains(result.Issues, issue =>
+            issue.Code == "ARITHMETIC_DIVIDE_NULL_ON_ZERO_REQUIRED");
+    }
+
     private static string Format(ValidationIssue issue)
     {
         return $"{issue.Code} {issue.Path}: {issue.Message}";

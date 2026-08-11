@@ -97,6 +97,10 @@ namespace ExcelReportBuilder.Core.Periods
             if (value is string stringValue)
             {
                 text = stringValue.Trim();
+                if (HasMalformedSeparatorSequence(text))
+                {
+                    return false;
+                }
             }
             else if (TryFormatCompactNumericValue(value, out text))
             {
@@ -114,6 +118,23 @@ namespace ExcelReportBuilder.Core.Periods
             }
 
             return token.Index == 0 && token.Length == text.Length;
+        }
+
+        private static bool HasMalformedSeparatorSequence(string text)
+        {
+            string compact = Regex.Replace(text.Trim(), @"\s+", " ").ToUpperInvariant();
+            compact = compact.Replace("Q ", "Q");
+            const string separators = " -_./";
+            for (var index = 1; index < compact.Length; index++)
+            {
+                if (separators.IndexOf(compact[index - 1]) >= 0
+                    && separators.IndexOf(compact[index]) >= 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         public static bool TryFindToken(string text, int? reportingYear, out ParsedPeriodToken token)

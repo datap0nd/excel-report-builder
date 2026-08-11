@@ -163,4 +163,63 @@ public sealed class ReconciliationTests
 
         Assert.Equal(CheckOutcome.Failed, result.Outcome);
     }
+
+    [Fact]
+    public void Post_transform_row_check_requires_independent_exact_evidence()
+    {
+        var snapshot = new ReconciliationSnapshot
+        {
+            ProjectedNormalizedRows = 100,
+            ActualNormalizedRows = 40
+        };
+        var plan = new[]
+        {
+            new BuildCheckPlan
+            {
+                Id = "rows",
+                Kind = ReportCheckKind.NoTruncation,
+                Mandatory = true,
+                RowCountExpectation = RowCountExpectation.ExactPostTransformCount
+            }
+        };
+
+        CheckResult result = Assert.Single(new ReportReconciler().Reconcile(snapshot, plan));
+
+        Assert.Equal(CheckOutcome.Failed, result.Outcome);
+        Assert.Null(result.Expected);
+        Assert.Contains("unavailable", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(40, CheckOutcome.Passed)]
+    [InlineData(0, CheckOutcome.Failed)]
+    [InlineData(39, CheckOutcome.Failed)]
+    [InlineData(41, CheckOutcome.Failed)]
+    public void Post_transform_row_check_accepts_only_the_independently_expected_count(
+        long actualRows,
+        CheckOutcome expectedOutcome)
+    {
+        var snapshot = new ReconciliationSnapshot
+        {
+            ProjectedNormalizedRows = 100,
+            ExpectedPostTransformNormalizedRows = 40,
+            ActualNormalizedRows = actualRows
+        };
+        var plan = new[]
+        {
+            new BuildCheckPlan
+            {
+                Id = "rows",
+                Kind = ReportCheckKind.NoTruncation,
+                Mandatory = true,
+                RowCountExpectation = RowCountExpectation.ExactPostTransformCount
+            }
+        };
+
+        CheckResult result = Assert.Single(new ReportReconciler().Reconcile(snapshot, plan));
+
+        Assert.Equal(expectedOutcome, result.Outcome);
+        Assert.Equal(40m, result.Expected);
+        Assert.Equal(actualRows, result.Actual);
+    }
 }

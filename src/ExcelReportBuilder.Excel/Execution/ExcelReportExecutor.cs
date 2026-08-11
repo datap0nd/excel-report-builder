@@ -2,10 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Threading;
 using ExcelReportBuilder.Core.Measures;
 using ExcelReportBuilder.Core.Planning;
 using ExcelReportBuilder.Core.Specifications;
+using ExcelReportBuilder.Core.Transforms;
 using ExcelReportBuilder.Excel.Ownership;
 using ExcelReportBuilder.Excel.Persistence;
 using ExcelReportBuilder.Excel.Rendering;
@@ -43,6 +46,8 @@ namespace ExcelReportBuilder.Excel.Execution
     /// </summary>
     public sealed class ExcelReportExecutor
     {
+        internal const int MaximumIndependentPivotFilterPairs = 14;
+
         private readonly CanonicalDataLoader canonicalDataLoader;
         private readonly ManagedWorksheetService worksheetService;
         private readonly NativePivotTableExecutor pivotExecutor;
@@ -51,6 +56,7 @@ namespace ExcelReportBuilder.Excel.Execution
         private readonly ReportReconciler reconciler;
         private readonly CanonicalDataAuditor canonicalDataAuditor;
         private readonly SourceTotalLineageResolver sourceTotalLineageResolver;
+        private readonly SourceReconciliationAuditor sourceReconciliationAuditor;
 
         public ExcelReportExecutor(
             CanonicalDataLoader? canonicalDataLoader = null,
@@ -60,7 +66,8 @@ namespace ExcelReportBuilder.Excel.Execution
             WorkbookSpecStore? specStore = null,
             ReportReconciler? reconciler = null,
             CanonicalDataAuditor? canonicalDataAuditor = null,
-            SourceTotalLineageResolver? sourceTotalLineageResolver = null)
+            SourceTotalLineageResolver? sourceTotalLineageResolver = null,
+            SourceReconciliationAuditor? sourceReconciliationAuditor = null)
         {
             this.canonicalDataLoader = canonicalDataLoader ?? new CanonicalDataLoader();
             this.worksheetService = worksheetService ?? new ManagedWorksheetService();
@@ -70,6 +77,8 @@ namespace ExcelReportBuilder.Excel.Execution
             this.reconciler = reconciler ?? new ReportReconciler();
             this.canonicalDataAuditor = canonicalDataAuditor ?? new CanonicalDataAuditor();
             this.sourceTotalLineageResolver = sourceTotalLineageResolver ?? new SourceTotalLineageResolver();
+            this.sourceReconciliationAuditor = sourceReconciliationAuditor ??
+                new SourceReconciliationAuditor();
         }
 
         public ExcelBuildResult BuildManagedDraft(
@@ -120,10 +129,55 @@ namespace ExcelReportBuilder.Excel.Execution
             }
 
             cancellationToken.ThrowIfCancellationRequested();
+            var hasRowRemovalTransforms = specification.Transforms.Any(transform =>
+                transform is FilterRowsTransform ||
+                transform is ExcludeTotalRowsTransform);
+            var requiresSourceTransformAudit = plan.Checks.Any(check =>
+                check.Kind == ReportCheckKind.TotalPreservation &&
+                check.EvaluationScope == CheckEvaluationScope.CanonicalData) ||
+                hasRowRemovalTransforms;
+            SourceReconciliationAudit? sourceAudit = null;
+            if (requiresSourceTransformAudit)
+            {
+                progressSink.Report(new ExcelProgress
+                {
+                    Stage = ExcelBuildStage.Checking,
+                    Operation = hasRowRemovalTransforms
+                        ? "Independently auditing row-removal transforms and additive totals across the complete source. The next bulk Excel reads may temporarily block Excel."
+                        : specification.Transforms.Count > 0
+                            ? "Independently auditing transformed additive totals across the complete source. The next bulk Excel reads may temporarily block Excel."
+                            : "Independently auditing additive totals across the complete source. The next bulk Excel reads may temporarily block Excel.",
+                    ManagedObject = specification.Source.WorkbookObjectName,
+                    ProjectedRows = plan.Source.ProjectedRows
+                });
+                dynamic sourceRange = FindSourceRange(
+                    workbook,
+                    specification.Source.WorkbookObjectName);
+                sourceAudit = sourceReconciliationAuditor.AuditRange(
+                    (object)sourceRange,
+                    specification,
+                    plan.Source.SourceRows,
+                    cancellationToken);
+                progressSink.Report(new ExcelProgress
+                {
+                    Stage = ExcelBuildStage.Checking,
+                    Operation = hasRowRemovalTransforms
+                        ? "Exact post-transform row count and filtered source totals are ready."
+                        : "Transformed source totals are ready.",
+                    ManagedObject = specification.Source.WorkbookObjectName,
+                    ProjectedRows = sourceAudit.ExpectedNormalizedRows
+                });
+            }
+
             var sourceTotals = plan.Checks.Any(check =>
                     check.Kind == ReportCheckKind.TotalPreservation &&
                     check.EvaluationScope == CheckEvaluationScope.CanonicalData)
-                ? ReadSourceTotals(excelApplication, workbook, specification)
+                ? sourceAudit != null
+                    ? sourceAudit.ExpectedTotals.ToDictionary(
+                        total => total.Key,
+                        total => total.Value,
+                        StringComparer.OrdinalIgnoreCase)
+                    : ReadSourceTotals(excelApplication, workbook, specification)
                 : new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
             var canonical = canonicalDataLoader.Load(
                 workbook,
@@ -131,14 +185,17 @@ namespace ExcelReportBuilder.Excel.Execution
                 specification.OwnershipId,
                 plan.Source.PowerQueryM,
                 plan.Source.ProjectedRows,
+                plan.Source.Route == SourceLoadRoute.DataModel
+                    ? CanonicalBackend.DataModel
+                    : CanonicalBackend.Worksheet,
                 progressSink,
                 cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
 
             var draftNames = new List<string>();
             var pivotNames = new List<string>();
-            var pivotTotals = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
-            var outputTotals = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+            var scopedPivotTotals = new Dictionary<ManagedBlockMeasureKey, decimal>();
+            var scopedOutputTotals = new Dictionary<ManagedBlockMeasureKey, decimal>();
             var outputMinimums = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
             var missingRequiredValues = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
             var checksForDrafts = new List<CheckResult>();
@@ -152,9 +209,26 @@ namespace ExcelReportBuilder.Excel.Execution
                 style => style.Id,
                 StringComparer.OrdinalIgnoreCase);
 
-            foreach (var output in ManagedOutputLayoutPlanner.Group(specification.Id, plan.Blocks))
+            worksheetService.DeleteStaleHiddenPivotWorksheets(
+                excelApplication,
+                workbook,
+                specification.Id,
+                plan.Blocks
+                    .Where(block => block.OutputMode == ReportOutputMode.DenseGrid)
+                    .Select(block => block.OwnershipId + "_pivot_sheet")
+                    .ToArray());
+
+            IReadOnlyList<ManagedOutputWorksheetPlan> activeOutputs =
+                ManagedOutputLayoutPlanner.Group(specification.Id, plan.Blocks);
+            worksheetService.DeleteStaleDraftWorksheets(
+                excelApplication,
+                workbook,
+                specification.Id,
+                activeOutputs.Select(output => output.DraftIdentity.ObjectId).ToArray());
+
+            foreach (var output in activeOutputs)
             {
-                dynamic managedDraft = worksheetService.GetOrCreateDraft(
+                dynamic managedDraft = worksheetService.GetOrCreateClearedDraft(
                     workbook,
                     output.DraftIdentity,
                     output.LogicalWorksheetName + " draft");
@@ -214,7 +288,12 @@ namespace ExcelReportBuilder.Excel.Execution
                     }
 
                     dynamic builtPivot = draft.PivotTables(pivot.PivotTableName);
-                    ReadPivotTotals(block, builtPivot, pivot, pivotTotals, outputTotals, true);
+                    ReadPivotTotals(
+                        block,
+                        builtPivot,
+                        pivot,
+                        scopedPivotTotals,
+                        scopedOutputTotals);
                     renderedNativePivots.Add(new RenderedNativePivot { Pivot = builtPivot, Result = pivot });
 
                     continue;
@@ -236,7 +315,6 @@ namespace ExcelReportBuilder.Excel.Execution
                     progressSink);
                 pivotNames.Add(pivotResult.PivotTableName);
                 dynamic nativeHiddenPivot = hidden.PivotTables(pivotResult.PivotTableName);
-                ReadPivotTotals(block, nativeHiddenPivot, pivotResult, pivotTotals, outputTotals, false);
                 var densePlan = CreateDensePlan(
                     block,
                     nativeHiddenPivot,
@@ -262,10 +340,16 @@ namespace ExcelReportBuilder.Excel.Execution
             cancellationToken.ThrowIfCancellationRequested();
             var denseAudit = ReadDenseOutputStatistics(
                 renderedDenseBlocks,
-                outputTotals,
+                scopedPivotTotals,
+                scopedOutputTotals,
                 outputMinimums,
                 missingRequiredValues);
             ReadNativePivotStatistics(renderedNativePivots, outputMinimums, missingRequiredValues);
+            var comparablePivotTotals = scopedPivotTotals
+                .Where(total => scopedOutputTotals.ContainsKey(total.Key))
+                .ToDictionary(total => total.Key, total => total.Value);
+            var pivotTotals = ManagedOutputAuditor.AggregateByMeasure(comparablePivotTotals);
+            var outputTotals = ManagedOutputAuditor.AggregateByMeasure(scopedOutputTotals);
 
             foreach (var draft in drafts.Values)
             {
@@ -294,29 +378,24 @@ namespace ExcelReportBuilder.Excel.Execution
                 });
             }
 
-            long normalizedRows;
-            Dictionary<string, decimal> normalizedTotals;
-            if (canonical.Backend == CanonicalBackend.DataModel)
-            {
-                var audit = canonicalDataAuditor.AuditDataModel(
-                    workbook,
-                    specification.Id,
-                    specification.OwnershipId,
-                    plan.Source.PowerQueryM,
-                    specification.Measures,
-                    plan.Source.ProjectedRows,
-                    progressSink,
-                    cancellationToken);
-                normalizedRows = audit.ActualRows;
-                normalizedTotals = new Dictionary<string, decimal>(
-                    audit.Totals,
-                    StringComparer.OrdinalIgnoreCase);
-            }
-            else
-            {
-                normalizedRows = CountCanonicalRows(workbook, canonical);
-                normalizedTotals = ReadCanonicalTotals(workbook, canonical, specification);
-            }
+            var canonicalAudit = canonicalDataAuditor.AuditDataModel(
+                workbook,
+                specification.Id,
+                specification.OwnershipId,
+                plan.Source.PowerQueryM,
+                specification.Measures,
+                plan.Source.ProjectedRows,
+                progressSink,
+                cancellationToken);
+            long normalizedRows = canonical.Backend == CanonicalBackend.DataModel
+                ? CountDataModelRows(workbook, canonical.TableOrConnectionName)
+                : CountCanonicalRows(workbook, canonical);
+            Dictionary<string, decimal> normalizedTotals =
+                canonical.Backend == CanonicalBackend.DataModel
+                    ? new Dictionary<string, decimal>(
+                        canonicalAudit.Totals,
+                        StringComparer.OrdinalIgnoreCase)
+                    : ReadCanonicalTotals(workbook, canonical, specification);
             progressSink.Report(new ExcelProgress
             {
                 Stage = ExcelBuildStage.Checking,
@@ -327,6 +406,7 @@ namespace ExcelReportBuilder.Excel.Execution
             {
                 SourceRows = plan.Source.SourceRows,
                 ProjectedNormalizedRows = plan.Source.ProjectedRows,
+                ExpectedPostTransformNormalizedRows = sourceAudit?.ExpectedNormalizedRows,
                 ActualNormalizedRows = normalizedRows,
                 SourceTotals = sourceTotals,
                 NormalizedTotals = normalizedTotals,
@@ -335,20 +415,36 @@ namespace ExcelReportBuilder.Excel.Execution
                 OutputMinimums = outputMinimums,
                 MissingRequiredValues = missingRequiredValues
             }, plan.Checks));
+            checks.Add(new CheckResult
+            {
+                CheckId = "mandatory-canonical-load-row-count",
+                Outcome = normalizedRows == canonicalAudit.ActualRows
+                    ? CheckOutcome.Passed
+                    : CheckOutcome.Failed,
+                Message = normalizedRows == canonicalAudit.ActualRows
+                    ? "The loaded canonical row count matches the independently refreshed audit query."
+                    : "The loaded canonical row count differs from the independently refreshed audit query.",
+                Expected = canonicalAudit.ActualRows,
+                Actual = normalizedRows
+            });
             checks.AddRange(checksForDrafts);
             if (denseAudit.FormulasChecked > 0)
             {
-                var passed = denseAudit.FormulaErrors == 0 && denseAudit.FormulaMismatches == 0;
+                var passed = denseAudit.FormulaErrors == 0 &&
+                    denseAudit.FormulaMismatches == 0 &&
+                    denseAudit.ExpectedValueMismatches == 0;
                 checks.Add(new CheckResult
                 {
                     CheckId = "mandatory-dense-formula-integrity",
                     Outcome = passed ? CheckOutcome.Passed : CheckOutcome.Failed,
                     Message = passed
-                        ? "All managed dense formulas match the typed render plan and calculated without Excel errors."
+                        ? "All managed dense formulas match the typed render plan and independently evaluated PivotTable values."
                         : denseAudit.FormulaErrors.ToString(CultureInfo.InvariantCulture) +
                           " formula errors and " +
                           denseAudit.FormulaMismatches.ToString(CultureInfo.InvariantCulture) +
-                          " changed formulas were found in the managed draft."
+                          " changed formulas and " +
+                          denseAudit.ExpectedValueMismatches.ToString(CultureInfo.InvariantCulture) +
+                          " independently evaluated value mismatches were found in the managed draft."
                 });
             }
             else
@@ -361,21 +457,27 @@ namespace ExcelReportBuilder.Excel.Execution
                 });
             }
 
-            var grandTotalMeasureIds = plan.Blocks
-                .SelectMany(block => block.Pivot.Values)
-                .Where(value => value.Expression is AggregateMeasureExpression && value.PeriodSliceIds.Count == 0)
-                .Select(value => value.MeasureId)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
+            var requiredBlockTotals = plan.Blocks
+                .SelectMany(block => block.Pivot.Values
+                    .Where(value => value.Expression is AggregateMeasureExpression &&
+                                    value.PeriodSliceIds.Count == 0)
+                    .Select(value => new ManagedBlockMeasureKey(block.BlockId, value.MeasureId)))
+                .Distinct()
                 .ToList();
-            var missingGrandTotals = grandTotalMeasureIds
-                .Where(measureId => !pivotTotals.ContainsKey(measureId) || !outputTotals.ContainsKey(measureId))
+            checks.AddRange(ManagedOutputAuditor.ReconcileBlockTotals(
+                requiredBlockTotals,
+                scopedPivotTotals,
+                scopedOutputTotals,
+                ManagedOutputAuditor.FormulaTolerance));
+            var missingGrandTotals = requiredBlockTotals
+                .Where(key => !scopedPivotTotals.ContainsKey(key) || !scopedOutputTotals.ContainsKey(key))
                 .ToList();
             checks.Add(new CheckResult
             {
                 CheckId = "mandatory-managed-grand-totals",
                 Outcome = missingGrandTotals.Count == 0 ? CheckOutcome.Passed : CheckOutcome.Failed,
                 Message = missingGrandTotals.Count == 0
-                    ? grandTotalMeasureIds.Count == 0
+                    ? requiredBlockTotals.Count == 0
                         ? "Calculated Values are validated through managed formula integrity checks."
                         : "Every unsliced aggregate Value has both a PivotTable total and an independently read output total."
                     : "One or more unsliced aggregate Values are missing a PivotTable or output grand total."
@@ -561,7 +663,18 @@ namespace ExcelReportBuilder.Excel.Execution
                 }
             }
 
+            var hasExplicitGrandColumn = block.Pivot.Columns.Count > 0 &&
+                outputColumns.Any(output => output.ColumnPath.DisplayItems.Count == 0);
+
             var formulaCompiler = new MeasureFormulaCompiler();
+            var measureEvaluator = new PivotMeasureEvaluator(
+                measures,
+                pivot,
+                (caption, filters) => ReadPivotAggregateExpectation(
+                    (object)nativePivot,
+                    caption,
+                    filters));
+            var rowFieldOrder = block.Pivot.Rows.Select(row => row.Field).ToList();
             var detailStride = block.Presentation.Options.InsertBlankRows ? 2 : 1;
             result.FreezeHeaders = block.Presentation.Options.FreezeHeaders;
             result.FreezeRelativeRow = nextRow + 1;
@@ -605,21 +718,37 @@ namespace ExcelReportBuilder.Excel.Execution
                         }
                     }
 
+                    var formula = formulaCompiler.CompileAcrossMemberSets(
+                        output.Value.MeasureId,
+                        measures,
+                        pivot,
+                        memberSets,
+                        periodFilters,
+                        rowFieldOrder);
+                    var expectedValue = measureEvaluator.EvaluateAcrossMemberSets(
+                        output.Value.MeasureId,
+                        memberSets,
+                        periodFilters,
+                        rowFieldOrder);
                     result.Cells.Add(new DenseCellWrite
                     {
                         RelativeRow = detailRow,
                         RelativeColumn = output.RelativeColumn,
                         Kind = DenseCellValueKind.Formula,
-                        Formula = formulaCompiler.CompileAcrossMemberSets(
-                            output.Value.MeasureId,
-                            measures,
-                            pivot,
-                            memberSets,
-                            periodFilters,
-                            block.Pivot.Rows.Select(row => row.Field).ToList()),
+                        Formula = formula,
+                        ExpectedFormulaValue = expectedValue,
                         NumberFormat = output.Value.NumberFormat,
                         StyleId = rowPath.StyleId ?? output.ColumnPath.StyleId ?? block.Presentation.BodyStyleId,
-                        MeasureId = output.Value.MeasureId
+                        MeasureId = output.Value.MeasureId,
+                        IsOutputTotal = IsDenseOutputTotalContribution(
+                            block.Presentation.Options.ShowRowGrandTotals,
+                            rowPath.IsSubtotal,
+                            output.IsSliced,
+                            output.Value.Expression is AggregateMeasureExpression,
+                            block.Pivot.Columns.Count,
+                            hasExplicitGrandColumn,
+                            output.ColumnPath.IsSubtotal,
+                            output.ColumnPath.DisplayItems.Count == 0)
                     });
                 }
 
@@ -639,8 +768,6 @@ namespace ExcelReportBuilder.Excel.Execution
                     Value = block.Pivot.GrandTotals.RowLabel,
                     StyleId = block.Pivot.GrandTotals.StyleId ?? block.Presentation.GrandTotalStyleId
                 });
-                var hasExplicitGrandColumn = block.Pivot.Columns.Count > 0 &&
-                    outputColumns.Any(output => output.ColumnPath.DisplayItems.Count == 0);
                 for (var outputIndex = 0; outputIndex < outputColumns.Count; outputIndex++)
                 {
                     var output = outputColumns[outputIndex];
@@ -655,18 +782,25 @@ namespace ExcelReportBuilder.Excel.Execution
                         }
                     }
 
+                    var formula = formulaCompiler.CompileAcrossMemberSets(
+                        output.Value.MeasureId,
+                        measures,
+                        pivot,
+                        totalMemberSets,
+                        periodFilters,
+                        rowFieldOrder);
+                    var expectedValue = measureEvaluator.EvaluateAcrossMemberSets(
+                        output.Value.MeasureId,
+                        totalMemberSets,
+                        periodFilters,
+                        rowFieldOrder);
                     result.Cells.Add(new DenseCellWrite
                     {
                         RelativeRow = grandTotalRow,
                         RelativeColumn = output.RelativeColumn,
                         Kind = DenseCellValueKind.Formula,
-                        Formula = formulaCompiler.CompileAcrossMemberSets(
-                            output.Value.MeasureId,
-                            measures,
-                            pivot,
-                            totalMemberSets,
-                            periodFilters,
-                            block.Pivot.Rows.Select(row => row.Field).ToList()),
+                        Formula = formula,
+                        ExpectedFormulaValue = expectedValue,
                         NumberFormat = output.Value.NumberFormat,
                         StyleId = block.Pivot.GrandTotals.StyleId ?? block.Presentation.GrandTotalStyleId,
                         MeasureId = output.Value.MeasureId,
@@ -679,6 +813,31 @@ namespace ExcelReportBuilder.Excel.Execution
             }
 
             return result;
+        }
+
+        internal static bool IsDenseOutputTotalContribution(
+            bool showRowGrandTotals,
+            bool rowIsSubtotal,
+            bool outputIsSliced,
+            bool isAggregateMeasure,
+            int columnFieldCount,
+            bool hasExplicitGrandColumn,
+            bool columnIsSubtotal,
+            bool columnIsGrandTotal)
+        {
+            if (showRowGrandTotals || rowIsSubtotal || outputIsSliced || !isAggregateMeasure)
+            {
+                return false;
+            }
+
+            if (columnFieldCount == 0)
+            {
+                return true;
+            }
+
+            return hasExplicitGrandColumn
+                ? columnIsGrandTotal
+                : !columnIsSubtotal;
         }
 
         private static int AddRowSpacers(
@@ -904,6 +1063,108 @@ namespace ExcelReportBuilder.Excel.Execution
             return Convert.ToDecimal(cell.Value2, CultureInfo.InvariantCulture);
         }
 
+        internal static DenseFormulaExpectation ReadPivotAggregateExpectation(
+            object pivot,
+            string dataFieldCaption,
+            IReadOnlyList<PivotFilterItem> filters)
+        {
+            if (filters.Count > MaximumIndependentPivotFilterPairs)
+            {
+                throw new NotSupportedException(
+                    "Independent PivotTable validation supports up to fourteen field filters per aggregate term.");
+            }
+
+            var arguments = new object[1 + filters.Count * 2];
+            arguments[0] = dataFieldCaption;
+            for (var index = 0; index < filters.Count; index++)
+            {
+                arguments[1 + index * 2] = filters[index].Field;
+                arguments[2 + index * 2] = filters[index].Value ?? string.Empty;
+            }
+
+            object? pivotCell;
+            try
+            {
+                pivotCell = pivot.GetType().InvokeMember(
+                    "GetPivotData",
+                    BindingFlags.Instance |
+                    BindingFlags.Public |
+                    BindingFlags.InvokeMethod |
+                    BindingFlags.OptionalParamBinding,
+                    null,
+                    pivot,
+                    arguments,
+                    CultureInfo.InvariantCulture);
+            }
+            catch (TargetInvocationException exception) when (exception.InnerException is COMException)
+            {
+                throw new InvalidOperationException(
+                    "The native PivotTable aggregate could not be read independently.",
+                    exception.InnerException);
+            }
+            catch (COMException exception)
+            {
+                throw new InvalidOperationException(
+                    "The native PivotTable aggregate could not be read independently.",
+                    exception);
+            }
+
+            if (pivotCell == null)
+            {
+                throw new InvalidOperationException(
+                    "The native PivotTable returned no aggregate cell for independent validation.");
+            }
+
+            dynamic cell = pivotCell;
+            try
+            {
+                var displayed = Convert.ToString(cell.Text, CultureInfo.InvariantCulture) ?? string.Empty;
+                if (ManagedOutputAuditor.IsExcelErrorDisplay(displayed))
+                {
+                    throw new InvalidOperationException(
+                        "The native PivotTable aggregate contains an Excel error and cannot be independently validated.");
+                }
+            }
+            catch (COMException exception)
+            {
+                throw new InvalidOperationException(
+                    "The native PivotTable aggregate display value could not be read independently.",
+                    exception);
+            }
+
+            object? value;
+            try
+            {
+                value = cell.Value2;
+            }
+            catch (COMException exception)
+            {
+                throw new InvalidOperationException(
+                    "The native PivotTable aggregate value could not be read independently.",
+                    exception);
+            }
+
+            if (value == null || string.IsNullOrWhiteSpace(Convert.ToString(value, CultureInfo.InvariantCulture)))
+            {
+                return DenseFormulaExpectation.Number(0m);
+            }
+
+            try
+            {
+                return DenseFormulaExpectation.Number(
+                    Convert.ToDecimal(value, CultureInfo.InvariantCulture));
+            }
+            catch (Exception exception) when (
+                exception is FormatException ||
+                exception is InvalidCastException ||
+                exception is OverflowException)
+            {
+                throw new InvalidOperationException(
+                    "A PivotTable aggregate returned a non-numeric value during independent validation.",
+                    exception);
+            }
+        }
+
         private static bool TryConvertPeriod(object rawValue, out DateTime period)
         {
             if (rawValue is DateTime date)
@@ -991,11 +1252,14 @@ namespace ExcelReportBuilder.Excel.Execution
             public int FormulaErrors { get; set; }
 
             public int FormulaMismatches { get; set; }
+
+            public int ExpectedValueMismatches { get; set; }
         }
 
         private static DenseFormulaAudit ReadDenseOutputStatistics(
             IReadOnlyList<RenderedDenseBlock> rendered,
-            IDictionary<string, decimal> outputTotals,
+            IDictionary<ManagedBlockMeasureKey, decimal> pivotTotals,
+            IDictionary<ManagedBlockMeasureKey, decimal> outputTotals,
             IDictionary<string, decimal> minimums,
             IDictionary<string, long> missing)
         {
@@ -1003,7 +1267,6 @@ namespace ExcelReportBuilder.Excel.Execution
             foreach (var block in rendered)
             {
                 var anchor = CellAddress.Parse(block.Plan.AnchorCell);
-                var blockTotals = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
                 foreach (var write in block.Plan.Cells.Where(cell =>
                              cell.Kind == DenseCellValueKind.Formula &&
                              !string.IsNullOrWhiteSpace(cell.MeasureId)))
@@ -1012,27 +1275,23 @@ namespace ExcelReportBuilder.Excel.Execution
                         anchor.Row + write.RelativeRow,
                         anchor.Column + write.RelativeColumn];
                     audit.FormulasChecked++;
+                    var hasExcelError = false;
+                    var formulaReadFailed = false;
+                    var actualFormula = string.Empty;
+                    var displayed = string.Empty;
                     try
                     {
-                        var actualFormula = Convert.ToString(cell.Formula, CultureInfo.InvariantCulture) ?? string.Empty;
-                        if (write.Formula == null ||
-                            !string.Equals(actualFormula, write.Formula.Value, StringComparison.Ordinal))
-                        {
-                            audit.FormulaMismatches++;
-                        }
-
-                        var displayed = Convert.ToString(cell.Text, CultureInfo.InvariantCulture) ?? string.Empty;
-                        if (displayed.StartsWith("#", StringComparison.Ordinal))
-                        {
-                            audit.FormulaErrors++;
-                        }
+                        actualFormula = Convert.ToString(cell.Formula, CultureInfo.InvariantCulture) ?? string.Empty;
+                        displayed = Convert.ToString(cell.Text, CultureInfo.InvariantCulture) ?? string.Empty;
                     }
                     catch (Exception)
                     {
-                        audit.FormulaErrors++;
+                        hasExcelError = true;
+                        formulaReadFailed = true;
                     }
 
                     object? value;
+                    var valueReadFailed = false;
                     try
                     {
                         value = cell.Value2;
@@ -1040,9 +1299,59 @@ namespace ExcelReportBuilder.Excel.Execution
                     catch (Exception)
                     {
                         value = null;
+                        valueReadFailed = true;
                     }
 
-                    if (value == null || string.IsNullOrWhiteSpace(Convert.ToString(value, CultureInfo.InvariantCulture)))
+                    if (formulaReadFailed || valueReadFailed ||
+                        write.Formula == null || write.ExpectedFormulaValue == null)
+                    {
+                        if (formulaReadFailed || write.Formula == null)
+                        {
+                            audit.FormulaMismatches++;
+                            audit.FormulaErrors++;
+                        }
+
+                        audit.ExpectedValueMismatches++;
+                    }
+                    else
+                    {
+                        var cellAudit = ManagedOutputAuditor.AuditFormulaCell(
+                            write.Formula,
+                            write.ExpectedFormulaValue,
+                            actualFormula,
+                            displayed,
+                            value);
+                        hasExcelError = cellAudit.HasExcelError;
+                        if (cellAudit.FormulaChanged)
+                        {
+                            audit.FormulaMismatches++;
+                        }
+
+                        if (cellAudit.HasExcelError)
+                        {
+                            audit.FormulaErrors++;
+                        }
+
+                        if (!cellAudit.ValueMatches)
+                        {
+                            audit.ExpectedValueMismatches++;
+                        }
+                    }
+
+                    if (write.IsOutputTotal &&
+                        write.ExpectedFormulaValue != null &&
+                        write.ExpectedFormulaValue.Kind == DenseFormulaExpectationKind.Number &&
+                        write.ExpectedFormulaValue.NumericValue.HasValue)
+                    {
+                        var key = new ManagedBlockMeasureKey(block.Plan.BlockId, write.MeasureId!);
+                        pivotTotals[key] = pivotTotals.TryGetValue(key, out var total)
+                            ? checked(total + write.ExpectedFormulaValue.NumericValue.Value)
+                            : write.ExpectedFormulaValue.NumericValue.Value;
+                    }
+
+                    if (hasExcelError ||
+                        value == null ||
+                        string.IsNullOrWhiteSpace(Convert.ToString(value, CultureInfo.InvariantCulture)))
                     {
                         missing[write.MeasureId!] = missing.TryGetValue(write.MeasureId!, out var count)
                             ? count + 1
@@ -1055,8 +1364,9 @@ namespace ExcelReportBuilder.Excel.Execution
                         var number = Convert.ToDecimal(value, CultureInfo.InvariantCulture);
                         if (write.IsOutputTotal)
                         {
-                            blockTotals[write.MeasureId!] = blockTotals.TryGetValue(write.MeasureId!, out var total)
-                                ? total + number
+                            var key = new ManagedBlockMeasureKey(block.Plan.BlockId, write.MeasureId!);
+                            outputTotals[key] = outputTotals.TryGetValue(key, out var total)
+                                ? checked(total + number)
                                 : number;
                         }
 
@@ -1075,14 +1385,6 @@ namespace ExcelReportBuilder.Excel.Execution
                         missing[write.MeasureId!] = missing.TryGetValue(write.MeasureId!, out var count)
                             ? count + 1
                             : 1;
-                    }
-                }
-
-                foreach (var total in blockTotals)
-                {
-                    if (!outputTotals.ContainsKey(total.Key))
-                    {
-                        outputTotals[total.Key] = total.Value;
                     }
                 }
             }
@@ -1242,7 +1544,8 @@ namespace ExcelReportBuilder.Excel.Execution
             foreach (var measure in specification.Measures)
             {
                 if (!(measure.Expression is AggregateMeasureExpression aggregate) ||
-                    aggregate.Function != AggregateFunction.Sum)
+                    aggregate.Function != AggregateFunction.Sum ||
+                    !string.IsNullOrWhiteSpace(aggregate.PeriodSliceId))
                 {
                     continue;
                 }
@@ -1314,19 +1617,22 @@ namespace ExcelReportBuilder.Excel.Execution
             DenseReportBlockPlan block,
             dynamic nativePivot,
             PivotBuildResult pivotResult,
-            IDictionary<string, decimal> pivotTotals,
-            IDictionary<string, decimal> outputTotals,
-            bool usePivotAsOutput)
+            IDictionary<ManagedBlockMeasureKey, decimal> pivotTotals,
+            IDictionary<ManagedBlockMeasureKey, decimal> outputTotals)
         {
             foreach (var value in block.Pivot.Values)
             {
-                if (!(value.Expression is AggregateMeasureExpression))
+                if (!(value.Expression is AggregateMeasureExpression aggregate))
                 {
                     continue;
                 }
 
                 var descriptor = pivotResult.DataFields.FirstOrDefault(field =>
-                    string.Equals(field.MeasureId, value.MeasureId, StringComparison.OrdinalIgnoreCase));
+                    string.Equals(field.MeasureId, value.MeasureId, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(field.SourceField, aggregate.Field, StringComparison.OrdinalIgnoreCase) &&
+                    field.Function == aggregate.Function &&
+                    field.Filters.Count == 0 &&
+                    string.Equals(field.PeriodSliceId, aggregate.PeriodSliceId, StringComparison.OrdinalIgnoreCase));
                 if (descriptor == null)
                 {
                     continue;
@@ -1334,14 +1640,9 @@ namespace ExcelReportBuilder.Excel.Execution
 
                 dynamic totalCell = nativePivot.GetPivotData(descriptor.PivotCaption);
                 var total = Convert.ToDecimal(totalCell.Value2, CultureInfo.InvariantCulture);
-                if (!pivotTotals.ContainsKey(value.MeasureId))
-                {
-                    pivotTotals[value.MeasureId] = total;
-                    if (usePivotAsOutput)
-                    {
-                        outputTotals[value.MeasureId] = total;
-                    }
-                }
+                var key = new ManagedBlockMeasureKey(block.BlockId, value.MeasureId);
+                pivotTotals[key] = total;
+                outputTotals[key] = total;
             }
         }
 
@@ -1403,7 +1704,7 @@ namespace ExcelReportBuilder.Excel.Execution
             if (canonical.Backend != CanonicalBackend.Worksheet)
             {
                 throw new InvalidOperationException(
-                    "Data Model row counts must be read from the independently refreshed canonical audit.");
+                    "Data Model row counts must be read from the managed ModelTable record count.");
             }
 
             var sheetCount = Convert.ToInt32(workbook.Worksheets.Count, CultureInfo.InvariantCulture);
@@ -1421,6 +1722,74 @@ namespace ExcelReportBuilder.Excel.Execution
             }
 
             throw new InvalidOperationException("The managed canonical table could not be found after refresh.");
+        }
+
+        internal static long CountDataModelRows(dynamic workbook, string managedConnectionName)
+        {
+            if (workbook == null)
+            {
+                throw new ArgumentNullException(nameof(workbook));
+            }
+
+            if (string.IsNullOrWhiteSpace(managedConnectionName))
+            {
+                throw new ArgumentException(
+                    "A managed Data Model connection name is required.",
+                    nameof(managedConnectionName));
+            }
+
+            long? result = null;
+            dynamic modelTables = workbook.Model.ModelTables;
+            int tableCount = Convert.ToInt32(modelTables.Count, CultureInfo.InvariantCulture);
+            for (var tableIndex = 1; tableIndex <= tableCount; tableIndex++)
+            {
+                dynamic modelTable = modelTables.Item(tableIndex);
+                dynamic? sourceConnection;
+                try
+                {
+                    sourceConnection = modelTable.SourceWorkbookConnection;
+                }
+                catch (Exception)
+                {
+                    continue;
+                }
+
+                if (sourceConnection == null)
+                {
+                    continue;
+                }
+
+                string? sourceName = Convert.ToString(
+                    sourceConnection.Name,
+                    CultureInfo.InvariantCulture);
+                if (!string.Equals(
+                        sourceName,
+                        managedConnectionName,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (result.HasValue)
+                {
+                    throw new InvalidOperationException(
+                        "More than one Data Model table is linked to the managed canonical connection.");
+                }
+
+                long recordCount = Convert.ToInt64(
+                    modelTable.RecordCount,
+                    CultureInfo.InvariantCulture);
+                if (recordCount < 0L)
+                {
+                    throw new InvalidOperationException(
+                        "The managed Data Model table returned an invalid row count.");
+                }
+
+                result = recordCount;
+            }
+
+            return result ?? throw new InvalidOperationException(
+                "The managed canonical connection is not linked to exactly one Data Model table.");
         }
     }
 }

@@ -26,6 +26,20 @@ namespace ExcelReportBuilder.Excel.Execution
                 throw new NotSupportedException("The report specification version is not supported.");
             }
 
+            if (plan.Source.Route != SourceLoadRoute.Worksheet &&
+                plan.Source.Route != SourceLoadRoute.DataModel)
+            {
+                throw new NotSupportedException(
+                    "The report plan contains an unsupported canonical-data route.");
+            }
+
+            var useDataModel = plan.Source.Route == SourceLoadRoute.DataModel;
+            if (plan.Blocks.Any(block => block.Pivot.UseDataModel != useDataModel))
+            {
+                throw new NotSupportedException(
+                    "Every managed PivotTable must use the same validated backend as the canonical data.");
+            }
+
             DemandCheckMeasuresAreRendered(plan);
 
             foreach (var block in plan.Blocks)
@@ -91,6 +105,29 @@ namespace ExcelReportBuilder.Excel.Execution
                     }
 
                     ValidateFilters(value.Expression, nativeOutput);
+                    if (!nativeOutput && block.Pivot.Values.Contains(value))
+                    {
+                        DemandIndependentPivotReadIsBounded(block, value);
+                    }
+                }
+            }
+        }
+
+        private static void DemandIndependentPivotReadIsBounded(
+            DenseReportBlockPlan block,
+            PivotValuePlan value)
+        {
+            foreach (var component in value.AggregateComponents)
+            {
+                var filterPairs = block.Pivot.Rows.Count +
+                                  block.Pivot.Columns.Count +
+                                  component.Filters.Count +
+                                  (!string.IsNullOrWhiteSpace(component.PeriodSliceId) ? 1 : 0) +
+                                  (value.PeriodSliceIds.Count > 0 ? 1 : 0);
+                if (filterPairs > ExcelReportExecutor.MaximumIndependentPivotFilterPairs)
+                {
+                    throw new NotSupportedException(
+                        "A dense Value requires more PivotTable field filters than can be independently validated by this executor version.");
                 }
             }
         }

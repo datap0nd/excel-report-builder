@@ -69,6 +69,20 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
         <SolidColorBrush x:Key="WarningBrush" Color="#765100" />
         <SolidColorBrush x:Key="InfoBrush" Color="#245A77" />
 
+        <Style x:Key="ManualRestrictionBanner" TargetType="Border">
+            <Setter Property="Visibility" Value="Collapsed" />
+            <Setter Property="Background" Value="#FFF6DD" />
+            <Setter Property="BorderBrush" Value="#D6B968" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Margin" Value="0,12,0,0" />
+            <Setter Property="Padding" Value="10,8" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding CanEditManualSpecification}" Value="False">
+                    <Setter Property="Visibility" Value="Visible" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
         <Style x:Key="VisibleFocusStyle" TargetType="Control">
             <Setter Property="Template">
                 <Setter.Value>
@@ -443,9 +457,9 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <TextBlock Foreground="{StaticResource MutedTextBrush}">
-                        <Run Text="{Binding Activity.StagePositionLabel}" />
+                        <Run Text="{Binding Activity.StagePositionLabel, Mode=OneWay}" />
                         <Run Text=" · " />
-                        <Run Text="{Binding Activity.CurrentStageLabel}" />
+                        <Run Text="{Binding Activity.CurrentStageLabel, Mode=OneWay}" />
                     </TextBlock>
                     <TextBlock Grid.Column="1"
                                Text="{Binding Activity.ElapsedLabel}"
@@ -457,7 +471,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
                              Height="3"
                              Minimum="0"
                              Maximum="100"
-                             Value="{Binding Activity.StageProgress}"
+                             Value="{Binding Activity.StageProgress, Mode=OneWay}"
                              Foreground="{StaticResource AccentBrush}"
                              Background="#DDE4DF"
                              BorderThickness="0"
@@ -483,6 +497,13 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
                                Margin="0,3,0,0"
                                Foreground="{StaticResource MutedTextBrush}"
                                TextWrapping="Wrap" />
+
+                    <Border Style="{StaticResource ManualRestrictionBanner}">
+                        <TextBlock Text="{Binding ManualEditingRestrictionMessage}"
+                                   Foreground="{StaticResource WarningBrush}"
+                                   TextWrapping="Wrap"
+                                   AutomationProperties.Name="Manual setup is read-only" />
+                    </Border>
 
                     <TextBlock Text="Workbook data" Style="{StaticResource SectionHeading}" />
                     <Border BorderBrush="{StaticResource RuleBrush}"
@@ -525,6 +546,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
                         </DataGrid.Columns>
                     </DataGrid>
 
+                    <StackPanel IsEnabled="{Binding CanEditManualSpecification}">
                     <TextBlock Text="Period layout" Style="{StaticResource SectionHeading}" />
                     <Border BorderBrush="{StaticResource RuleBrush}"
                             BorderThickness="0,1,0,0"
@@ -744,6 +766,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
                                        TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
+                    </StackPanel>
                 </StackPanel>
             </ScrollViewer>
 
@@ -764,6 +787,13 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
                                Foreground="{StaticResource MutedTextBrush}"
                                TextWrapping="Wrap" />
 
+                    <Border Style="{StaticResource ManualRestrictionBanner}">
+                        <TextBlock Text="{Binding ManualEditingRestrictionMessage}"
+                                   Foreground="{StaticResource WarningBrush}"
+                                   TextWrapping="Wrap"
+                                   AutomationProperties.Name="Manual setup is read-only" />
+                    </Border>
+
                     <TextBlock Text="Saved report setup" Style="{StaticResource SectionHeading}" />
                     <Border Background="{StaticResource SubtleBrush}"
                             BorderBrush="{StaticResource RuleBrush}"
@@ -774,6 +804,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
                                    TextWrapping="Wrap" />
                     </Border>
 
+                    <StackPanel IsEnabled="{Binding CanEditManualSpecification}">
                     <TextBlock Text="Output style" Style="{StaticResource SectionHeading}" />
                     <ComboBox ItemsSource="{Binding OutputStyles}"
                               SelectedItem="{Binding SelectedOutputStyle, UpdateSourceTrigger=PropertyChanged}"
@@ -1129,6 +1160,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
                                      AutomationProperties.Name="Column grand total label" />
                         </StackPanel>
                     </Border>
+                    </StackPanel>
 
                     <Border BorderBrush="{StaticResource RuleBrush}"
                             BorderThickness="0,1,0,0"
@@ -1178,7 +1210,8 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
                                      AutomationProperties.HelpText="Use a local or explicitly configured OpenAI-compatible HTTP endpoint." />
 
                             <TextBlock Text="API key" Style="{StaticResource FieldLabel}" Margin="0,10,0,4" />
-                            <PasswordBox PasswordChanged="OnApiKeyChanged"
+                            <PasswordBox x:Name="ApiKeyBox"
+                                         PasswordChanged="OnApiKeyChanged"
                                          AutomationProperties.Name="Model endpoint API key"
                                          AutomationProperties.HelpText="After a successful endpoint call, the key is protected with Windows Current User data protection and is never displayed." />
                             <TextBlock Text="{Binding ApiKeyStateLabel}"
@@ -1335,6 +1368,14 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
                                Foreground="{StaticResource MutedTextBrush}"
                                TextWrapping="Wrap" />
 
+                    <Border Style="{StaticResource ManualRestrictionBanner}">
+                        <TextBlock Text="{Binding ManualEditingRestrictionMessage}"
+                                   Foreground="{StaticResource WarningBrush}"
+                                   TextWrapping="Wrap"
+                                   AutomationProperties.Name="Manual setup is read-only" />
+                    </Border>
+
+                    <StackPanel IsEnabled="{Binding CanEditManualSpecification}">
                     <TextBlock Text="Required checks" Style="{StaticResource SectionHeading}" />
                     <TextBlock Text="The builder always adds row-count and rendered-output reconciliation. Add report-specific rules here."
                                Foreground="{StaticResource MutedTextBrush}"
@@ -1396,6 +1437,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
                                      AutomationProperties.Name="Required check tolerance" />
                         </StackPanel>
                     </Border>
+                    </StackPanel>
 
                     <TextBlock Text="Publish gate" Style="{StaticResource SectionHeading}" />
                     <Border Background="{StaticResource SubtleBrush}"

@@ -1,21 +1,12 @@
 using System;
-using System.Security.Cryptography;
-using System.Text;
+using ExcelReportBuilder.Agent.Security;
 
 namespace ExcelReportBuilder.Worker;
 
 public static class PipeNamePolicy
 {
-    public const string Prefix = "excel-report-builder-";
-    public const int MaximumLength = 128;
-
-    public static string CreateDefaultForCurrentUser()
-    {
-        var user = Environment.UserName ?? string.Empty;
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(user));
-        var suffix = Convert.ToHexString(bytes, 0, 12).ToLowerInvariant();
-        return Prefix + suffix;
-    }
+    public const string Prefix = WorkerHandshakeAuthenticator.PipePrefix;
+    public const int MaximumLength = WorkerHandshakeAuthenticator.MaximumPipeNameLength;
 
     public static string Validate(string? pipeName)
     {

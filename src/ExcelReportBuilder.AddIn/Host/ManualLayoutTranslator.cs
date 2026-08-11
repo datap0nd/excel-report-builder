@@ -143,7 +143,25 @@ namespace ExcelReportBuilder.AddIn.Host
                     path + " managed columns");
 
                 var block = CloneBlock(template);
-                if (string.IsNullOrWhiteSpace(snapshot.StableId))
+                bool hasCanonicalBlockId = !string.IsNullOrWhiteSpace(snapshot.CanonicalBlockId);
+                bool hasCanonicalOwnershipId = !string.IsNullOrWhiteSpace(snapshot.CanonicalOwnershipId);
+                if (hasCanonicalBlockId != hasCanonicalOwnershipId)
+                {
+                    throw new InvalidOperationException(
+                        path + " has an incomplete managed identity and cannot be rebuilt safely.");
+                }
+
+                if (hasCanonicalBlockId)
+                {
+                    block.Id = snapshot.CanonicalBlockId!;
+                    block.OwnershipId = snapshot.CanonicalOwnershipId!;
+                    if (!blockIds.Add(block.Id) || !ownershipIds.Add(block.OwnershipId))
+                    {
+                        throw new InvalidOperationException(
+                            path + " duplicates another managed block identity.");
+                    }
+                }
+                else if (string.IsNullOrWhiteSpace(snapshot.StableId))
                 {
                     block.Id = CreateLegacyBlockId(
                         template.Id,

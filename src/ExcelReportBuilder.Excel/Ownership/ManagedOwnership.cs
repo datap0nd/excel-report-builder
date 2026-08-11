@@ -12,6 +12,7 @@ namespace ExcelReportBuilder.Excel.Ownership
         CanonicalQuery,
         DataModelConnection,
         PivotTable,
+        PivotCache,
         DraftWorksheet,
         PublishedWorksheet,
         RollbackWorksheet,

@@ -58,6 +58,80 @@ public sealed class OwnershipTests
             new ManagedObjectIdentity("another", "draft", ManagedObjectKind.DraftWorksheet)));
     }
 
+    [Fact]
+    public void Registry_remove_deletes_only_exact_report_kind_and_object_id_records()
+    {
+        var workbook = new WorkbookSpecStoreTests.FakeWorkbook();
+        var registry = new WorkbookOwnershipRegistry();
+        var removed = new ManagedObjectIdentity("report", "pivot", ManagedObjectKind.PivotTable);
+        var otherReport = new ManagedObjectIdentity("other", "pivot", ManagedObjectKind.PivotTable);
+        var otherKind = new ManagedObjectIdentity("report", "pivot", ManagedObjectKind.Metadata);
+        registry.Register(workbook, removed, "RemovedPivot");
+        registry.Register(workbook, otherReport, "OtherReportPivot");
+        registry.Register(workbook, otherKind, "OtherKindObject");
+
+        registry.Remove(workbook, new[] { removed });
+
+        Assert.False(registry.IsOwned(workbook, removed, "RemovedPivot"));
+        Assert.True(registry.IsOwned(workbook, otherReport, "OtherReportPivot"));
+        Assert.True(registry.IsOwned(workbook, otherKind, "OtherKindObject"));
+    }
+
+    [Fact]
+    public void Registry_round_trips_pivot_cache_locator_and_source_contract()
+    {
+        var workbook = new WorkbookSpecStoreTests.FakeWorkbook();
+        var registry = new WorkbookOwnershipRegistry();
+        var identity = new ManagedObjectIdentity(
+            "report",
+            "block_cache",
+            ManagedObjectKind.PivotCache);
+
+        registry.Register(
+            workbook,
+            identity,
+            "ManagedCache",
+            "7",
+            "M|12:MANAGEDMODEL");
+
+        ManagedObjectRecord record = Assert.Single(registry.Load(workbook));
+        Assert.Equal(identity.ReportId, record.ReportId);
+        Assert.Equal(identity.ObjectId, record.ObjectId);
+        Assert.Equal(identity.Kind, record.Kind);
+        Assert.Equal("ManagedCache", record.ExcelName);
+        Assert.Equal("7", record.Locator);
+        Assert.Equal("M|12:MANAGEDMODEL", record.SourceContract);
+        Assert.Contains("locator=\"7\"", Assert.Single(workbook.CustomXMLParts.AllXml));
+    }
+
+    [Fact]
+    public void Registry_replaces_metadata_only_for_the_same_exact_cache_identity()
+    {
+        var workbook = new WorkbookSpecStoreTests.FakeWorkbook();
+        var registry = new WorkbookOwnershipRegistry();
+        var identity = new ManagedObjectIdentity(
+            "report",
+            "block_cache",
+            ManagedObjectKind.PivotCache);
+        var other = new ManagedObjectIdentity(
+            "other_report",
+            "block_cache",
+            ManagedObjectKind.PivotCache);
+        registry.Register(workbook, identity, "ManagedCache", "1", "W|5:FIRST");
+        registry.Register(workbook, other, "OtherCache", "9", "W|5:OTHER");
+
+        registry.Register(workbook, identity, "ManagedCache", "2", "W|6:SECOND");
+
+        IReadOnlyList<ManagedObjectRecord> records = registry.Load(workbook);
+        Assert.Equal(2, records.Count);
+        ManagedObjectRecord updated = records.Single(record => record.ReportId == "report");
+        ManagedObjectRecord untouched = records.Single(record => record.ReportId == "other_report");
+        Assert.Equal("2", updated.Locator);
+        Assert.Equal("W|6:SECOND", updated.SourceContract);
+        Assert.Equal("9", untouched.Locator);
+        Assert.Equal("W|5:OTHER", untouched.SourceContract);
+    }
+
     public sealed class FakeWorksheet
     {
         public FakeCustomProperties CustomProperties { get; } = new();

@@ -19,6 +19,48 @@ public sealed class PeriodValueNormalizerTests
     }
 
     [Theory]
+    [InlineData(202601)]
+    [InlineData(202601d)]
+    public void Normalizes_compact_numeric_month_values(object value)
+    {
+        DateTime result = PeriodValueNormalizer.Normalize(
+            value,
+            expectedGrain: PeriodGrain.Month);
+
+        Assert.Equal(new DateTime(2026, 1, 1), result);
+    }
+
+    [Theory]
+    [InlineData("Jan--26")]
+    [InlineData("2026//01")]
+    [InlineData("Q1__26")]
+    [InlineData("Jan - 26")]
+    public void Rejects_malformed_repeated_period_delimiters(string value)
+    {
+        Assert.Throws<ArgumentException>(() =>
+            PeriodValueNormalizer.Normalize(value, expectedGrain: PeriodGrain.Month));
+    }
+
+    [Fact]
+    public void Repeated_whitespace_remains_a_supported_period_separator()
+    {
+        DateTime result = PeriodValueNormalizer.Normalize(
+            "Jan   26",
+            expectedGrain: PeriodGrain.Month);
+
+        Assert.Equal(new DateTime(2026, 1, 1), result);
+    }
+
+    [Theory]
+    [InlineData(202600)]
+    [InlineData(202613)]
+    public void Rejects_invalid_six_digit_numeric_periods(int value)
+    {
+        Assert.Throws<ArgumentException>(() =>
+            PeriodValueNormalizer.Normalize(value, expectedGrain: PeriodGrain.Month));
+    }
+
+    [Theory]
     [InlineData("Q1 2026", 1)]
     [InlineData("2026-Q2", 4)]
     [InlineData("Q3-26", 7)]

@@ -205,6 +205,31 @@ namespace ExcelReportBuilder.Excel.Rendering
                     throw new InvalidOperationException("Dense cell indentation must be between 0 and 15.");
                 }
 
+                if (cell.Kind == DenseCellValueKind.Formula)
+                {
+                    if (cell.Formula == null)
+                    {
+                        throw new InvalidOperationException("A formula cell is missing its host-generated formula.");
+                    }
+
+                    if (cell.ExpectedFormulaValue == null)
+                    {
+                        throw new InvalidOperationException(
+                            "Every managed formula requires an independent typed result expectation.");
+                    }
+
+                    if (string.IsNullOrWhiteSpace(cell.MeasureId))
+                    {
+                        throw new InvalidOperationException(
+                            "Every managed formula requires a typed Value identifier for validation.");
+                    }
+                }
+                else if (cell.ExpectedFormulaValue != null)
+                {
+                    throw new InvalidOperationException(
+                        "Only managed formula cells may carry a typed result expectation.");
+                }
+
                 var absoluteRow = anchor.Row + cell.RelativeRow;
                 var finalColumn = anchor.Column + cell.RelativeColumn + cell.ColumnSpan - 1;
                 if (cell.RelativeRow >= plan.OwnedRowCount ||

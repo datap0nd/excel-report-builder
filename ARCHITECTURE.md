@@ -15,7 +15,7 @@ Validated ReportSpecV1
         |                v
         |        owned Excel objects only
         |
-        +----> current-user named pipe ----> local agent worker
+        +----> authenticated one-use pipe ----> local agent worker
                                               |
                                               v
                                   OpenAI-compatible endpoint
@@ -28,6 +28,11 @@ changes and allowlisted job operations. Its only local write is bounded,
 non-sensitive checkpoint metadata under the current user's application-data
 directory. The add-in validates every request and owns the complete Excel
 execution path.
+
+Each job uses a fresh random pipe name and a 256-bit launch secret inherited by
+the child process. The worker proves that secret with an HMAC over the pipe,
+nonce, and protocol version before sensitive payloads are sent. The secret is
+not placed on the command line, and the worker exits after its one connection.
 
 ## Projects
 
@@ -54,9 +59,17 @@ execution path.
 6. The report compiler creates a backend-neutral pivot and layout plan.
 7. The Excel executor builds hidden or visible native PivotTables and renders
    only managed draft sheets.
+   Before rendering, it clears each active owned draft and removes stale draft
+   and hidden-pivot sheets belonging to removed outputs or blocks for the same
+   report only.
 8. An independent validation plan reconciles row counts, totals, periods,
-   subtotals, ratios, formulas, and refresh state.
-9. Publishing remains a user action and never saves the workbook.
+   subtotals, ratios, formulas, and refresh state. Dense formula values are
+   evaluated independently from typed measure nodes and direct PivotTable
+   aggregate reads for every block.
+9. Publishing remains a user action and never saves the workbook. The publish
+   transaction freezes formulas to values, stages every final and rollback,
+   compensates the complete batch on failure, and retires removed managed
+   outputs only after every replacement succeeds.
 
 ## Large-data behavior
 

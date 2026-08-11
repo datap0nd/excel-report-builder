@@ -13,6 +13,7 @@ using ExcelReportBuilder.Agent.Execution;
 using ExcelReportBuilder.Agent.Models;
 using ExcelReportBuilder.Agent.OpenAI;
 using ExcelReportBuilder.Agent.Protocol;
+using ExcelReportBuilder.Agent.Security;
 using ExcelReportBuilder.Agent.Validation;
 
 namespace ExcelReportBuilder.Worker;
@@ -21,28 +22,30 @@ internal sealed class AgentWorkerServer
 {
     private const int MaximumConcurrentJobs = 2;
     private readonly string _pipeName;
+    private string _handshakeSecret;
     private readonly IJobCheckpointStore _checkpointStore;
     private readonly ActiveWorkbookJobRegistry _activeWorkbooks;
 
     public AgentWorkerServer(
         string pipeName,
+        string handshakeSecret,
         IJobCheckpointStore? checkpointStore = null,
         ActiveWorkbookJobRegistry? activeWorkbooks = null)
     {
         _pipeName = PipeNamePolicy.Validate(pipeName);
+        _handshakeSecret = WorkerHandshakeAuthenticator.IsValidSecret(handshakeSecret)
+            ? handshakeSecret
+            : throw new ArgumentException("The worker launch proof is invalid.", nameof(handshakeSecret));
         _checkpointStore = checkpointStore ?? new LocalAppDataJobCheckpointStore();
         _activeWorkbooks = activeWorkbooks ?? new ActiveWorkbookJobRegistry();
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            bool currentUserOnly;
-            using var server = CreateServerStream(out currentUserOnly);
-            await server.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
-            await HandleConnectionAsync(server, currentUserOnly, cancellationToken).ConfigureAwait(false);
-        }
+        bool currentUserOnly;
+        using var server = CreateServerStream(out currentUserOnly);
+        await server.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await HandleConnectionAsync(server, currentUserOnly, cancellationToken).ConfigureAwait(false);
     }
 
     private NamedPipeServerStream CreateServerStream(out bool currentUserOnly)
@@ -133,6 +136,29 @@ internal sealed class AgentWorkerServer
                             break;
                         }
 
+                        string authenticationTag;
+                        try
+                        {
+                            authenticationTag = WorkerHandshakeAuthenticator.ComputeAuthenticationTag(
+                                _handshakeSecret,
+                                _pipeName,
+                                hello.ClientNonce,
+                                AgentProtocol.Version);
+                        }
+                        catch (ArgumentException)
+                        {
+                            await TrySendProtocolErrorAsync(
+                                writer,
+                                "handshake_authentication_failed",
+                                "The worker handshake could not be authenticated.",
+                                connectionCancellation.Token).ConfigureAwait(false);
+                            break;
+                        }
+                        finally
+                        {
+                            _handshakeSecret = string.Empty;
+                        }
+
                         handshakeComplete = true;
                         var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0";
                         await writer.SendAsync(
@@ -143,6 +169,7 @@ internal sealed class AgentWorkerServer
                                 ProtocolVersion = AgentProtocol.Version,
                                 WorkerVersion = version,
                                 CurrentUserOnlyPipe = currentUserOnly,
+                                AuthenticationTag = authenticationTag,
                             },
                             connectionCancellation.Token).ConfigureAwait(false);
                         continue;

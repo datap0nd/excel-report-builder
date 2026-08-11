@@ -14,6 +14,10 @@ namespace ExcelReportBuilder.Excel.Ownership
         public ManagedObjectKind Kind { get; set; }
 
         public string ExcelName { get; set; } = string.Empty;
+
+        public string? Locator { get; set; }
+
+        public string? SourceContract { get; set; }
     }
 
     /// <summary>
@@ -26,7 +30,7 @@ namespace ExcelReportBuilder.Excel.Ownership
 
         public IReadOnlyList<ManagedObjectRecord> Load(dynamic workbook)
         {
-            foreach (var part in EnumerateParts(workbook))
+            foreach (var part in EnumerateParts((object)workbook))
             {
                 return Parse((string)part.XML);
             }
@@ -46,6 +50,16 @@ namespace ExcelReportBuilder.Excel.Ownership
 
         public void Register(dynamic workbook, ManagedObjectIdentity identity, string excelName)
         {
+            Register(workbook, identity, excelName, null, null);
+        }
+
+        public void Register(
+            dynamic workbook,
+            ManagedObjectIdentity identity,
+            string excelName,
+            string? locator,
+            string? sourceContract)
+        {
             IReadOnlyList<ManagedObjectRecord> loaded = Load((object)workbook);
             var records = loaded.Where(record =>
                 !(string.Equals(record.ReportId, identity.ReportId, StringComparison.Ordinal) &&
@@ -56,9 +70,39 @@ namespace ExcelReportBuilder.Excel.Ownership
                 ReportId = identity.ReportId,
                 ObjectId = identity.ObjectId,
                 Kind = identity.Kind,
-                ExcelName = excelName
+                ExcelName = excelName,
+                Locator = locator,
+                SourceContract = sourceContract
             });
             Save(workbook, records);
+        }
+
+        public void Remove(
+            dynamic workbook,
+            IReadOnlyCollection<ManagedObjectIdentity> identities)
+        {
+            if (workbook == null)
+            {
+                throw new ArgumentNullException(nameof(workbook));
+            }
+
+            if (identities == null)
+            {
+                throw new ArgumentNullException(nameof(identities));
+            }
+
+            if (identities.Count == 0)
+            {
+                return;
+            }
+
+            var keys = new HashSet<string>(identities.Select(IdentityKey), StringComparer.Ordinal);
+            IReadOnlyList<ManagedObjectRecord> loaded = Load((object)workbook);
+            var retained = loaded.Where(record => !keys.Contains(RecordKey(record))).ToList();
+            if (retained.Count != loaded.Count)
+            {
+                Save(workbook, retained);
+            }
         }
 
         public void RemoveReport(dynamic workbook, string reportId)
@@ -67,6 +111,21 @@ namespace ExcelReportBuilder.Excel.Ownership
             Save(workbook, loaded
                 .Where(record => !string.Equals(record.ReportId, reportId, StringComparison.Ordinal))
                 .ToList());
+        }
+
+        private static string IdentityKey(ManagedObjectIdentity identity)
+        {
+            if (identity == null)
+            {
+                throw new ArgumentException("An ownership identity cannot be null.", nameof(identity));
+            }
+
+            return identity.ReportId + "\u001f" + identity.Kind + "\u001f" + identity.ObjectId;
+        }
+
+        private static string RecordKey(ManagedObjectRecord record)
+        {
+            return record.ReportId + "\u001f" + record.Kind + "\u001f" + record.ObjectId;
         }
 
         private static IReadOnlyList<ManagedObjectRecord> Parse(string xml)
@@ -91,7 +150,9 @@ namespace ExcelReportBuilder.Excel.Ownership
                     ReportId = (string?)element.Attribute("reportId") ?? string.Empty,
                     ObjectId = (string?)element.Attribute("objectId") ?? string.Empty,
                     Kind = kind,
-                    ExcelName = (string?)element.Attribute("excelName") ?? string.Empty
+                    ExcelName = (string?)element.Attribute("excelName") ?? string.Empty,
+                    Locator = (string?)element.Attribute("locator"),
+                    SourceContract = (string?)element.Attribute("sourceContract")
                 });
             }
 
@@ -100,7 +161,7 @@ namespace ExcelReportBuilder.Excel.Ownership
 
         private static void Save(dynamic workbook, IReadOnlyList<ManagedObjectRecord> records)
         {
-            foreach (var part in EnumerateParts(workbook).ToList())
+            foreach (var part in EnumerateParts((object)workbook).ToList())
             {
                 part.Delete();
             }
@@ -110,12 +171,26 @@ namespace ExcelReportBuilder.Excel.Ownership
                 new XElement(
                     ns + "ownership",
                     new XAttribute("schemaVersion", "1.0"),
-                    records.Select(record => new XElement(
-                        ns + "object",
-                        new XAttribute("reportId", record.ReportId),
-                        new XAttribute("objectId", record.ObjectId),
-                        new XAttribute("kind", record.Kind),
-                        new XAttribute("excelName", record.ExcelName)))));
+                    records.Select(record =>
+                    {
+                        var element = new XElement(
+                            ns + "object",
+                            new XAttribute("reportId", record.ReportId),
+                            new XAttribute("objectId", record.ObjectId),
+                            new XAttribute("kind", record.Kind),
+                            new XAttribute("excelName", record.ExcelName));
+                        if (!string.IsNullOrWhiteSpace(record.Locator))
+                        {
+                            element.Add(new XAttribute("locator", record.Locator));
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(record.SourceContract))
+                        {
+                            element.Add(new XAttribute("sourceContract", record.SourceContract));
+                        }
+
+                        return element;
+                    })));
             workbook.CustomXMLParts.Add(document.ToString(SaveOptions.DisableFormatting));
         }
 

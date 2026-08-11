@@ -562,19 +562,16 @@ namespace ExcelReportBuilder.Core.Planning
                 Mandatory = true,
                 EvaluationScope = CheckEvaluationScope.CanonicalData,
                 RowCountExpectation = removesRows
-                    ? RowCountExpectation.AtMostProjection
+                    ? RowCountExpectation.ExactPostTransformCount
                     : RowCountExpectation.ExactProjection
             });
-            if (!removesRows)
+            target.Add(new BuildCheckPlan
             {
-                target.Add(new BuildCheckPlan
-                {
-                    Id = "mandatory-total-preservation",
-                    Kind = ReportCheckKind.TotalPreservation,
-                    Mandatory = true,
-                    EvaluationScope = CheckEvaluationScope.CanonicalData
-                });
-            }
+                Id = "mandatory-total-preservation",
+                Kind = ReportCheckKind.TotalPreservation,
+                Mandatory = true,
+                EvaluationScope = CheckEvaluationScope.CanonicalData
+            });
 
             target.Add(new BuildCheckPlan
             {
@@ -608,7 +605,7 @@ namespace ExcelReportBuilder.Core.Planning
                             ? CheckEvaluationScope.CanonicalData
                             : CheckEvaluationScope.RenderedOutput,
                     RowCountExpectation = removesRows
-                        ? RowCountExpectation.AtMostProjection
+                        ? RowCountExpectation.ExactPostTransformCount
                         : RowCountExpectation.ExactProjection
                 });
             }

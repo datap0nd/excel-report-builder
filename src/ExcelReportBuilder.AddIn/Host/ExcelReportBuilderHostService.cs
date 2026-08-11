@@ -432,7 +432,6 @@ namespace ExcelReportBuilder.AddIn.Host
                             client.DiscoverModelsAsync(endpoint, token),
                             "Still waiting for the endpoint model list.",
                             token).ConfigureAwait(false);
-                        await SaveEndpointAsync(endpoint, token).ConfigureAwait(false);
                         return (IReadOnlyList<string>)result.ModelIds;
                     }
                 });
@@ -462,12 +461,30 @@ namespace ExcelReportBuilder.AddIn.Host
                             client.CheckToolCallingAsync(endpoint, token),
                             "Still waiting for the synthetic endpoint capability checks.",
                             token).ConfigureAwait(false);
-                        await SaveEndpointAsync(endpoint, token).ConfigureAwait(false);
                         return new EndpointCheckResult(
                             result.ToolCallingAvailable &&
                             result.StructuredOutputAvailable,
                             result.Summary);
                     }
+                });
+        }
+
+        public Task PersistEndpointSettingsAsync(
+            ModelEndpointSettingsSnapshot endpointSettings,
+            SecureString? apiKey,
+            CancellationToken cancellationToken)
+        {
+            return RunOperationAsync(
+                cancellationToken,
+                async token =>
+                {
+                    AgentEndpointSettings endpoint = await MaterializeEndpointAsync(
+                        endpointSettings,
+                        apiKey,
+                        token).ConfigureAwait(false);
+                    AgentEndpointPolicy.Validate(endpoint);
+                    await SaveEndpointAsync(endpoint, token).ConfigureAwait(false);
+                    return true;
                 });
         }
 
@@ -796,26 +813,46 @@ namespace ExcelReportBuilder.AddIn.Host
                     check.Message);
             }
 
-            ReportBlockSpec block = _lastSpecification.Blocks[0];
-            string draftName = _lastBuild.DraftWorksheets.First();
             dynamic workbook = activeWorkbook;
-            dynamic draft = workbook.Worksheets.Item(draftName);
-            var identity = new ManagedObjectIdentity(
-                _lastSpecification.Id,
-                block.OwnershipId + "_draft",
-                ManagedObjectKind.DraftWorksheet);
-            bool owned = _ownershipGuard.IsOwned(draft, identity);
-            results.Add(new HostCheckResult(
-                "managed-ownership",
-                owned,
-                owned
-                    ? "The draft carries the expected managed ownership marker."
-                    : "The draft ownership marker does not match the report setup."));
-            Report(
-                ActivityStage.Checking,
-                owned ? ActivityKind.Check : ActivityKind.Error,
-                "Managed ownership: " + (owned ? "Pass" : "Fail"),
-                results.Last().Detail);
+            var logicalOutputs = _lastSpecification.Blocks
+                .GroupBy(
+                    item => ManagedOutputIdentity.LogicalKey(item.WorksheetName),
+                    StringComparer.Ordinal)
+                .Select(group => group.First().WorksheetName)
+                .ToList();
+            foreach (string logicalWorksheetName in logicalOutputs)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var identity = ManagedOutputIdentity.Draft(
+                    _lastSpecification.Id,
+                    logicalWorksheetName);
+                bool owned;
+                try
+                {
+                    dynamic draft = FindExactlyOneOwnedWorksheet(workbook, identity);
+                    owned = _ownershipGuard.IsOwned(draft, identity);
+                }
+                catch (InvalidOperationException)
+                {
+                    owned = false;
+                }
+
+                string detail = owned
+                    ? "Managed draft '" + logicalWorksheetName +
+                      "' carries its exact report ownership marker."
+                    : "Managed draft '" + logicalWorksheetName +
+                      "' is missing, duplicated, or has an unexpected ownership marker.";
+                results.Add(new HostCheckResult(
+                    "managed-ownership-" + identity.ObjectId,
+                    owned,
+                    detail));
+                Report(
+                    ActivityStage.Checking,
+                    owned ? ActivityKind.Check : ActivityKind.Error,
+                    "Managed ownership for " + logicalWorksheetName + ": " +
+                    (owned ? "Pass" : "Fail"),
+                    detail);
+            }
             if (_lastSpecification.PeriodMapping != null)
             {
                 results.Add(new HostCheckResult(
@@ -1934,7 +1971,15 @@ namespace ExcelReportBuilder.AddIn.Host
             ReportSpecV1 specification = compatible[0];
             try
             {
-                ReportSpecificationSnapshot snapshot = _translator.ToAppliedAgentSnapshot(specification);
+                ReportSpecificationSnapshot snapshot;
+                try
+                {
+                    snapshot = _translator.ToUi(specification);
+                }
+                catch (InvalidOperationException)
+                {
+                    snapshot = _translator.ToAppliedAgentSnapshot(specification);
+                }
                 PeriodMappingSpec? resolvedMapping = _translator.ResolvePeriodMapping(
                     snapshot.PeriodMapping,
                     source.Profile);
@@ -2189,10 +2234,9 @@ namespace ExcelReportBuilder.AddIn.Host
                 PersistedAgentSettings? persisted = await _settingsStore.LoadAsync(cancellationToken)
                     .ConfigureAwait(false);
                 if (persisted != null &&
-                    string.Equals(
-                        persisted.BaseUrl?.TrimEnd('/'),
-                        snapshot.BaseUrl.TrimEnd('/'),
-                        StringComparison.OrdinalIgnoreCase) &&
+                    AgentEndpointCredentialScope.Matches(
+                        persisted.BaseUrl,
+                        snapshot.BaseUrl) &&
                     persisted.AllowRemoteHttp == snapshot.AllowRemoteHttp)
                 {
                     AgentEndpointSettings saved = AgentSettingsMaterializer.Unprotect(

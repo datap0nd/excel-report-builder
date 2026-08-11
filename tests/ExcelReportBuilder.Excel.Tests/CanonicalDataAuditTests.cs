@@ -1,5 +1,6 @@
 using ExcelReportBuilder.Core.Measures;
 using ExcelReportBuilder.Excel.Execution;
+using ExcelReportBuilder.Excel.Ownership;
 
 namespace ExcelReportBuilder.Excel.Tests;
 
@@ -169,6 +170,99 @@ public sealed class CanonicalDataAuditTests
             CanonicalDataAuditor.ReadResult(table, plan));
 
         Assert.Contains("exactly one", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Same_named_replacement_audit_connection_is_not_deleted()
+    {
+        var workbook = new CanonicalDataLoaderIdempotencyTests.FakeWorkbook();
+        var identity = new ManagedObjectIdentity(
+            "report",
+            "source_canonical_audit_connection",
+            ManagedObjectKind.DataModelConnection);
+        const string connectionName = "Connection - ERB audit";
+        string queryName = new ManagedObjectIdentity(
+            "report",
+            "source_canonical_audit_query",
+            ManagedObjectKind.CanonicalQuery).ExcelName;
+        var replacement = workbook.Connections.AddExisting(
+            connectionName,
+            "OLEDB;Provider=Microsoft.ACE.OLEDB.12.0;Data Source=C:\\example\\external.xlsx",
+            "SELECT * FROM [ExternalQuery]",
+            2,
+            false);
+        new WorkbookOwnershipRegistry().Register(workbook, identity, connectionName);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            new CanonicalDataAuditor().DeletePriorManagedConnection(
+                workbook,
+                identity,
+                CanonicalConnectionContract.ConnectionString(queryName),
+                CanonicalConnectionContract.CommandText(queryName)));
+
+        Assert.Equal(0, replacement.DeleteCount);
+        Assert.Same(replacement, Assert.Single(workbook.Connections.All));
+    }
+
+    [Fact]
+    public void Registry_only_audit_connection_claim_is_removed_without_deleting_anything()
+    {
+        var workbook = new CanonicalDataLoaderIdempotencyTests.FakeWorkbook();
+        var identity = new ManagedObjectIdentity(
+            "report",
+            "source_canonical_audit_connection",
+            ManagedObjectKind.DataModelConnection);
+        const string connectionName = "Connection - ERB audit";
+        string queryName = new ManagedObjectIdentity(
+            "report",
+            "source_canonical_audit_query",
+            ManagedObjectKind.CanonicalQuery).ExcelName;
+        var registry = new WorkbookOwnershipRegistry();
+        registry.Register(workbook, identity, connectionName);
+
+        new CanonicalDataAuditor().DeletePriorManagedConnection(
+            workbook,
+            identity,
+            CanonicalConnectionContract.ConnectionString(queryName),
+            CanonicalConnectionContract.CommandText(queryName));
+
+        Assert.Empty(registry.Load(workbook));
+        Assert.Empty(workbook.Connections.All);
+    }
+
+    [Fact]
+    public void Exact_owned_audit_connection_is_deleted_after_live_contract_validation()
+    {
+        var workbook = new CanonicalDataLoaderIdempotencyTests.FakeWorkbook();
+        var identity = new ManagedObjectIdentity(
+            "report",
+            "source_canonical_audit_connection",
+            ManagedObjectKind.DataModelConnection);
+        const string connectionName = "Connection - ERB audit";
+        string queryName = new ManagedObjectIdentity(
+            "report",
+            "source_canonical_audit_query",
+            ManagedObjectKind.CanonicalQuery).ExcelName;
+        string expectedConnection = CanonicalConnectionContract.ConnectionString(queryName);
+        string expectedCommand = CanonicalConnectionContract.CommandText(queryName);
+        var connection = workbook.Connections.AddExisting(
+            connectionName,
+            expectedConnection,
+            expectedCommand,
+            2,
+            false);
+        var registry = new WorkbookOwnershipRegistry();
+        registry.Register(workbook, identity, connectionName);
+
+        new CanonicalDataAuditor().DeletePriorManagedConnection(
+            workbook,
+            identity,
+            expectedConnection,
+            expectedCommand);
+
+        Assert.Equal(1, connection.DeleteCount);
+        Assert.Empty(workbook.Connections.All);
+        Assert.Empty(registry.Load(workbook));
     }
 
     private static MeasureDefinition Aggregate(

@@ -13,6 +13,46 @@ namespace ExcelReportBuilder.Excel.Rendering
         Formula
     }
 
+    public enum DenseFormulaExpectationKind
+    {
+        Number,
+        Blank,
+        Error
+    }
+
+    /// <summary>
+    /// The independently evaluated result expected from a host-generated
+    /// formula. This value is calculated from typed measure nodes and native
+    /// PivotTable aggregate inputs, never by parsing or evaluating formula text.
+    /// </summary>
+    public sealed class DenseFormulaExpectation
+    {
+        private DenseFormulaExpectation(DenseFormulaExpectationKind kind, decimal? numericValue)
+        {
+            Kind = kind;
+            NumericValue = numericValue;
+        }
+
+        public DenseFormulaExpectationKind Kind { get; }
+
+        public decimal? NumericValue { get; }
+
+        internal static DenseFormulaExpectation Number(decimal value)
+        {
+            return new DenseFormulaExpectation(DenseFormulaExpectationKind.Number, value);
+        }
+
+        internal static DenseFormulaExpectation Blank()
+        {
+            return new DenseFormulaExpectation(DenseFormulaExpectationKind.Blank, null);
+        }
+
+        internal static DenseFormulaExpectation Error()
+        {
+            return new DenseFormulaExpectation(DenseFormulaExpectationKind.Error, null);
+        }
+    }
+
     public sealed class SafeExcelFormula
     {
         public const int MaximumFormulaCharacters = 8192;
@@ -66,6 +106,8 @@ namespace ExcelReportBuilder.Excel.Rendering
         public object? Value { get; set; }
 
         public SafeExcelFormula? Formula { get; set; }
+
+        public DenseFormulaExpectation? ExpectedFormulaValue { get; set; }
 
         public string? NumberFormat { get; set; }
 

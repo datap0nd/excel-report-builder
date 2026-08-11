@@ -24,6 +24,25 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Verify release tag is contained in main
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          if ($LASTEXITCODE -ne 0) {
+              throw "Could not fetch origin/main for release ancestry verification."
+          }
+
+          git merge-base --is-ancestor $env:GITHUB_SHA refs/remotes/origin/main
+          if ($LASTEXITCODE -eq 1) {
+              throw "Release tags must point to a commit contained in origin/main."
+          }
+          if ($LASTEXITCODE -ne 0) {
+              throw "Could not verify release-tag ancestry."
+          }
 
       - name: Run public-safety checks
         shell: pwsh
@@ -103,6 +122,42 @@ jobs:
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
 
+      - name: Stage complete release payload for SBOM
+        shell: pwsh
+        run: |
+          $payloadRoot = Join-Path (Resolve-Path "artifacts") "sbom-payload"
+          $addinRoot = Join-Path $payloadRoot "addin"
+          $workerX64Root = Join-Path $payloadRoot "worker-x64"
+          $workerX86Root = Join-Path $payloadRoot "worker-x86"
+          New-Item -ItemType Directory -Path $addinRoot -Force | Out-Null
+          New-Item -ItemType Directory -Path $workerX64Root -Force | Out-Null
+          New-Item -ItemType Directory -Path $workerX86Root -Force | Out-Null
+
+          Get-ChildItem "src/ExcelReportBuilder.AddIn/bin/Release/net48" -File |
+              Where-Object { $_.Extension -in @(".dll", ".config") } |
+              Copy-Item -Destination $addinRoot -Force
+          Copy-Item -Path "artifacts/worker-x64/*" -Destination $workerX64Root -Recurse -Force
+          Copy-Item -Path "artifacts/worker-x86/*" -Destination $workerX86Root -Recurse -Force
+          Copy-Item -Path @("README.md", "LICENSE") -Destination $payloadRoot -Force
+
+      - name: Generate complete payload SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        env:
+          SYFT_FILE_METADATA_SELECTION: all
+        with:
+          path: artifacts/sbom-payload
+          format: spdx-json
+          output-file: artifacts/ExcelReportBuilder.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Validate release SBOM components and hashes
+        shell: pwsh
+        run: >-
+          ./scripts/Test-ReleaseSbom.ps1
+          -SbomPath "artifacts/ExcelReportBuilder.spdx.json"
+          -PayloadPath "artifacts/sbom-payload"
+
       - name: Inspect COM registration contract
         shell: pwsh
         run: >-
@@ -132,7 +187,14 @@ jobs:
 
       - name: Smoke-test install, COM activation, worker handshake, and uninstall
         shell: pwsh
-        run: ./scripts/Test-Installer.ps1 -InstallerPath "artifacts\$env:INSTALLER_FILE"
+        run: |
+          $publishedWorkers = @(
+              "artifacts\worker-x64\ExcelReportBuilder.Worker.exe"
+              "artifacts\worker-x86\ExcelReportBuilder.Worker.exe"
+          )
+          ./scripts/Test-Installer.ps1 `
+              -InstallerPath "artifacts\$env:INSTALLER_FILE" `
+              -PublishedWorkerPaths $publishedWorkers
 
       - name: Create checksum
         shell: pwsh
@@ -148,6 +210,7 @@ jobs:
           path: |
             artifacts/${{ steps.version.outputs.installer-file }}
             artifacts/${{ steps.version.outputs.installer-file }}.sha256
+            artifacts/ExcelReportBuilder.spdx.json
           if-no-files-found: error
 
       - name: Upload task-pane preview
@@ -173,13 +236,6 @@ jobs:
         with:
           name: ExcelReportBuilderSetupUnsigned
           path: artifacts
-
-      - name: Generate SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
-        with:
-          path: artifacts
-          format: spdx-json
-          output-file: artifacts/ExcelReportBuilder.spdx.json
 
       - name: Attest installer provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2

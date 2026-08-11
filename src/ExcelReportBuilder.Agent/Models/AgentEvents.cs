@@ -89,6 +89,8 @@ public sealed class HelloRequest
     public string ClientName { get; set; } = string.Empty;
 
     public List<string> SupportedProtocolVersions { get; set; } = new List<string>();
+
+    public string ClientNonce { get; set; } = string.Empty;
 }
 
 public sealed class HelloAcknowledgement
@@ -98,6 +100,8 @@ public sealed class HelloAcknowledgement
     public string WorkerVersion { get; set; } = string.Empty;
 
     public bool CurrentUserOnlyPipe { get; set; }
+
+    public string AuthenticationTag { get; set; } = string.Empty;
 }
 
 public sealed class StartJobRequest

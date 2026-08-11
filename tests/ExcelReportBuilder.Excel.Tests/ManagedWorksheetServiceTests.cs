@@ -89,6 +89,189 @@ public sealed class ManagedWorksheetServiceTests
     }
 
     [Fact]
+    public void Reused_logical_draft_is_cleared_before_a_new_block_layout_is_rendered()
+    {
+        var identity = DraftIdentity();
+        var workbook = new FakeWorkbook();
+        var worksheet = workbook.Worksheets.AddExisting("Managed draft");
+        worksheet.AddPivot("Removed block pivot");
+        worksheet.AddListObject("Stale canonical object", isRefreshing: false);
+        new ManagedOwnershipGuard().MarkOwned(worksheet, identity);
+
+        dynamic actual = new ManagedWorksheetService().GetOrCreateClearedDraft(
+            workbook,
+            identity,
+            "Report draft");
+
+        Assert.Same(worksheet, actual);
+        Assert.Equal(0, worksheet.PivotTables().Count);
+        Assert.Equal(0, worksheet.ListObjects.Count);
+        Assert.Contains("pivot:Removed block pivot:clear", worksheet.Log);
+        Assert.Equal("cells:clear", worksheet.Log[^1]);
+    }
+
+    [Fact]
+    public void Deletes_only_current_report_orphan_hidden_pivots_and_retains_exact_cache_slots()
+    {
+        const string reportId = "report";
+        var workbook = new FakeWorkbook();
+        var application = new FakeExcelApplication();
+        var guard = new ManagedOwnershipGuard();
+        var registry = new WorkbookOwnershipRegistry();
+        var activeIdentity = new ManagedObjectIdentity(
+            reportId,
+            "active_owner_pivot_sheet",
+            ManagedObjectKind.PivotTable);
+        var staleIdentity = new ManagedObjectIdentity(
+            reportId,
+            "stale_owner_pivot_sheet",
+            ManagedObjectKind.PivotTable);
+        var otherReportIdentity = new ManagedObjectIdentity(
+            "other_report",
+            "other_owner_pivot_sheet",
+            ManagedObjectKind.PivotTable);
+        var active = workbook.Worksheets.AddExisting("Active hidden pivot");
+        var stale = workbook.Worksheets.AddExisting("Stale hidden pivot");
+        var otherReport = workbook.Worksheets.AddExisting("Other report pivot");
+        var unmanaged = workbook.Worksheets.AddExisting("Looks like an old pivot");
+        guard.MarkOwned(active, activeIdentity);
+        guard.MarkOwned(stale, staleIdentity);
+        guard.MarkOwned(otherReport, otherReportIdentity);
+        registry.Register(
+            workbook,
+            new ManagedObjectIdentity(reportId, "active_owner", ManagedObjectKind.PivotTable),
+            "ActivePivot");
+        registry.Register(
+            workbook,
+            new ManagedObjectIdentity(reportId, "stale_owner", ManagedObjectKind.PivotTable),
+            "StalePivot");
+        registry.Register(
+            workbook,
+            new ManagedObjectIdentity(reportId, "stale_owner_cache_worksheet", ManagedObjectKind.PivotCache),
+            "StaleCache",
+            "5",
+            "W|9:CANONICAL");
+        registry.Register(
+            workbook,
+            new ManagedObjectIdentity("other_report", "other_owner", ManagedObjectKind.PivotTable),
+            "OtherPivot");
+
+        new ManagedWorksheetService(guard, registry).DeleteStaleHiddenPivotWorksheets(
+            application,
+            workbook,
+            reportId,
+            new[] { activeIdentity.ObjectId });
+
+        Assert.Contains(active, workbook.Worksheets.All);
+        Assert.DoesNotContain(stale, workbook.Worksheets.All);
+        Assert.Contains(otherReport, workbook.Worksheets.All);
+        Assert.Contains(unmanaged, workbook.Worksheets.All);
+        Assert.Equal(new[] { false, true }, application.DisplayAlertAssignments);
+        IReadOnlyList<ManagedObjectRecord> records = registry.Load(workbook);
+        Assert.DoesNotContain(records, record =>
+            record.ReportId == reportId && record.ObjectId == "stale_owner");
+        Assert.Contains(records, record =>
+            record.ReportId == reportId && record.ObjectId == "stale_owner_cache_worksheet");
+        Assert.Contains(records, record =>
+            record.ReportId == reportId && record.ObjectId == "active_owner");
+        Assert.Contains(records, record =>
+            record.ReportId == "other_report" && record.ObjectId == "other_owner");
+    }
+
+    [Fact]
+    public void Restores_display_alerts_and_keeps_registry_record_when_stale_sheet_delete_fails()
+    {
+        const string reportId = "report";
+        var workbook = new FakeWorkbook();
+        var application = new FakeExcelApplication();
+        var guard = new ManagedOwnershipGuard();
+        var registry = new WorkbookOwnershipRegistry();
+        var staleIdentity = new ManagedObjectIdentity(
+            reportId,
+            "stale_owner_pivot_sheet",
+            ManagedObjectKind.PivotTable);
+        var stale = workbook.Worksheets.AddExisting("Stale hidden pivot");
+        stale.ThrowOnDelete = true;
+        guard.MarkOwned(stale, staleIdentity);
+        var pivotIdentity = new ManagedObjectIdentity(
+            reportId,
+            "stale_owner",
+            ManagedObjectKind.PivotTable);
+        registry.Register(workbook, pivotIdentity, "StalePivot");
+
+        Assert.Throws<InvalidOperationException>(() =>
+            new ManagedWorksheetService(guard, registry).DeleteStaleHiddenPivotWorksheets(
+                application,
+                workbook,
+                reportId,
+                Array.Empty<string>()));
+
+        Assert.True(application.DisplayAlerts);
+        Assert.Equal(new[] { false, true }, application.DisplayAlertAssignments);
+        Assert.Contains(stale, workbook.Worksheets.All);
+        Assert.True(registry.IsOwned(workbook, pivotIdentity, "StalePivot"));
+    }
+
+    [Fact]
+    public void Deletes_only_current_report_drafts_absent_from_the_active_output_plan()
+    {
+        const string reportId = "report";
+        var workbook = new FakeWorkbook();
+        var application = new FakeExcelApplication();
+        var guard = new ManagedOwnershipGuard();
+        var activeIdentity = ManagedOutputIdentity.Draft(reportId, "Report");
+        var staleIdentity = ManagedOutputIdentity.Draft(reportId, "Removed output");
+        var publishedIdentity = ManagedOutputIdentity.Published(reportId, "Removed output");
+        var otherReportIdentity = ManagedOutputIdentity.Draft("other_report", "Removed output");
+        var active = workbook.Worksheets.AddExisting("Active draft");
+        var stale = workbook.Worksheets.AddExisting("Stale draft");
+        var published = workbook.Worksheets.AddExisting("Published output");
+        var otherReport = workbook.Worksheets.AddExisting("Other report draft");
+        var unmanaged = workbook.Worksheets.AddExisting("Unmanaged draft");
+        guard.MarkOwned(active, activeIdentity);
+        guard.MarkOwned(stale, staleIdentity);
+        guard.MarkOwned(published, publishedIdentity);
+        guard.MarkOwned(otherReport, otherReportIdentity);
+
+        new ManagedWorksheetService(guard).DeleteStaleDraftWorksheets(
+            application,
+            workbook,
+            reportId,
+            new[] { activeIdentity.ObjectId });
+
+        Assert.Contains(active, workbook.Worksheets.All);
+        Assert.DoesNotContain(stale, workbook.Worksheets.All);
+        Assert.Contains(published, workbook.Worksheets.All);
+        Assert.Contains(otherReport, workbook.Worksheets.All);
+        Assert.Contains(unmanaged, workbook.Worksheets.All);
+        Assert.Equal(new[] { false, true }, application.DisplayAlertAssignments);
+    }
+
+    [Fact]
+    public void Restores_display_alerts_when_stale_draft_delete_fails()
+    {
+        const string reportId = "report";
+        var workbook = new FakeWorkbook();
+        var application = new FakeExcelApplication();
+        var guard = new ManagedOwnershipGuard();
+        var staleIdentity = ManagedOutputIdentity.Draft(reportId, "Removed output");
+        var stale = workbook.Worksheets.AddExisting("Stale draft");
+        stale.ThrowOnDelete = true;
+        guard.MarkOwned(stale, staleIdentity);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            new ManagedWorksheetService(guard).DeleteStaleDraftWorksheets(
+                application,
+                workbook,
+                reportId,
+                Array.Empty<string>()));
+
+        Assert.True(application.DisplayAlerts);
+        Assert.Equal(new[] { false, true }, application.DisplayAlertAssignments);
+        Assert.Contains(stale, workbook.Worksheets.All);
+    }
+
+    [Fact]
     public void Refuses_to_clear_an_unmanaged_sheet_before_touching_its_contents()
     {
         var worksheet = new FakeWorksheet("Unmanaged");
@@ -103,6 +286,55 @@ public sealed class ManagedWorksheetServiceTests
         Assert.Equal(1, worksheet.ListObjects.Count);
     }
 
+    [Fact]
+    public void Deletes_an_exact_owned_backend_sheet_and_restores_display_alerts()
+    {
+        var identity = new ManagedObjectIdentity(
+            "report",
+            "canonical",
+            ManagedObjectKind.CanonicalTable);
+        var workbook = new FakeWorkbook();
+        var application = new FakeExcelApplication();
+        var worksheet = workbook.Worksheets.AddExisting("Managed canonical");
+        new ManagedOwnershipGuard().MarkOwned(worksheet, identity);
+
+        bool removed = new ManagedWorksheetService().DeleteOwnedWorksheetIfPresent(
+            application,
+            workbook,
+            identity);
+
+        Assert.True(removed);
+        Assert.DoesNotContain(worksheet, workbook.Worksheets.All);
+        Assert.True(application.DisplayAlerts);
+        Assert.Equal(new[] { false, true }, application.DisplayAlertAssignments);
+    }
+
+    [Fact]
+    public void Backend_cleanup_rejects_duplicate_owned_sheets_before_deleting_either()
+    {
+        var identity = new ManagedObjectIdentity(
+            "report",
+            "canonical",
+            ManagedObjectKind.CanonicalTable);
+        var workbook = new FakeWorkbook();
+        var application = new FakeExcelApplication();
+        var first = workbook.Worksheets.AddExisting("Managed canonical 1");
+        var second = workbook.Worksheets.AddExisting("Managed canonical 2");
+        var guard = new ManagedOwnershipGuard();
+        guard.MarkOwned(first, identity);
+        guard.MarkOwned(second, identity);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            new ManagedWorksheetService(guard).DeleteOwnedWorksheetIfPresent(
+                application,
+                workbook,
+                identity));
+
+        Assert.Contains(first, workbook.Worksheets.All);
+        Assert.Contains(second, workbook.Worksheets.All);
+        Assert.Empty(application.DisplayAlertAssignments);
+    }
+
     private static ManagedObjectIdentity DraftIdentity()
     {
         return new ManagedObjectIdentity("report", "draft-object", ManagedObjectKind.DraftWorksheet);
@@ -111,6 +343,25 @@ public sealed class ManagedWorksheetServiceTests
     public sealed class FakeWorkbook
     {
         public FakeWorksheetCollection Worksheets { get; } = new();
+
+        public WorkbookSpecStoreTests.FakeCustomXmlParts CustomXMLParts { get; } = new();
+    }
+
+    public sealed class FakeExcelApplication
+    {
+        private bool displayAlerts = true;
+
+        public bool DisplayAlerts
+        {
+            get => displayAlerts;
+            set
+            {
+                displayAlerts = value;
+                DisplayAlertAssignments.Add(value);
+            }
+        }
+
+        public List<bool> DisplayAlertAssignments { get; } = new();
     }
 
     public sealed class FakeWorksheetCollection
@@ -119,12 +370,17 @@ public sealed class ManagedWorksheetServiceTests
 
         public int Count => worksheets.Count;
 
+        public IReadOnlyList<FakeWorksheet> All => worksheets;
+
         public int AddCount { get; private set; }
 
         public FakeWorksheet Add()
         {
             AddCount++;
-            var worksheet = new FakeWorksheet("Sheet" + AddCount);
+            FakeWorksheet? worksheet = null;
+            worksheet = new FakeWorksheet(
+                "Sheet" + AddCount,
+                () => worksheets.Remove(worksheet!));
             worksheets.Add(worksheet);
             return worksheet;
         }
@@ -157,9 +413,12 @@ public sealed class ManagedWorksheetServiceTests
     {
         private readonly FakePivotTableCollection pivotTables;
 
-        public FakeWorksheet(string name)
+        private readonly Action? delete;
+
+        public FakeWorksheet(string name, Action? delete = null)
         {
             Name = name;
+            this.delete = delete;
             Log = new List<string>();
             pivotTables = new FakePivotTableCollection(Log);
             ListObjects = new FakeListObjectCollection(Log);
@@ -169,6 +428,8 @@ public sealed class ManagedWorksheetServiceTests
         public string Name { get; set; }
 
         public int Visible { get; set; }
+
+        public bool ThrowOnDelete { get; set; }
 
         public List<string> Log { get; }
 
@@ -191,6 +452,17 @@ public sealed class ManagedWorksheetServiceTests
         public void AddListObject(string name, bool isRefreshing)
         {
             ListObjects.Add(name, isRefreshing);
+        }
+
+        public void Delete()
+        {
+            Log.Add("sheet:delete");
+            if (ThrowOnDelete)
+            {
+                throw new InvalidOperationException("Synthetic worksheet delete failure.");
+            }
+
+            delete?.Invoke();
         }
     }
 

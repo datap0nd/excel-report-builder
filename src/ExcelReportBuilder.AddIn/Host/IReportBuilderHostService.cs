@@ -51,6 +51,11 @@ namespace ExcelReportBuilder.AddIn.Host
             SecureString? apiKey,
             CancellationToken cancellationToken);
 
+        Task PersistEndpointSettingsAsync(
+            ModelEndpointSettingsSnapshot endpointSettings,
+            SecureString? apiKey,
+            CancellationToken cancellationToken);
+
         Task<IReadOnlyList<HostCheckResult>> RunChecksAsync(CancellationToken cancellationToken);
 
         Task<PublishResult> PublishManagedDraftAsync(CancellationToken cancellationToken);
@@ -314,7 +319,8 @@ namespace ExcelReportBuilder.AddIn.Host
             IReadOnlyList<ManualCalculatedMetricSnapshot>? calculatedMetrics = null,
             IReadOnlyList<ManualReportBlockSnapshot>? blocks = null,
             ManualLayoutSnapshot? layout = null,
-            IReadOnlyList<ManualCheckSnapshot>? checks = null)
+            IReadOnlyList<ManualCheckSnapshot>? checks = null,
+            bool manualProjectionComplete = true)
         {
             PeriodMapping = periodMapping ?? throw new ArgumentNullException(nameof(periodMapping));
             Placements = placements ?? throw new ArgumentNullException(nameof(placements));
@@ -325,6 +331,7 @@ namespace ExcelReportBuilder.AddIn.Host
             Blocks = blocks ?? Array.Empty<ManualReportBlockSnapshot>();
             Layout = layout ?? new ManualLayoutSnapshot();
             Checks = checks ?? Array.Empty<ManualCheckSnapshot>();
+            ManualProjectionComplete = manualProjectionComplete;
         }
 
         public PeriodMappingSnapshot PeriodMapping { get; }
@@ -350,6 +357,14 @@ namespace ExcelReportBuilder.AddIn.Host
         public ManualLayoutSnapshot Layout { get; }
 
         public IReadOnlyList<ManualCheckSnapshot> Checks { get; }
+
+        /// <summary>
+        /// True only when every canonical setting is represented by the manual
+        /// editor snapshot. A false value keeps the canonical setup available
+        /// for rebuild and Chat, but manual controls must remain read-only so an
+        /// edit cannot silently flatten unsupported blocks or calculations.
+        /// </summary>
+        public bool ManualProjectionComplete { get; }
 
         public bool HasCanonicalReportSpec => !string.IsNullOrWhiteSpace(CanonicalReportSpecJson);
     }
@@ -413,7 +428,9 @@ namespace ExcelReportBuilder.AddIn.Host
             string outputStyle,
             string? stableId = null,
             int ownedRows = 500,
-            int ownedColumns = 64)
+            int ownedColumns = 64,
+            string? canonicalBlockId = null,
+            string? canonicalOwnershipId = null)
         {
             Title = title ?? string.Empty;
             WorksheetName = worksheetName ?? string.Empty;
@@ -422,6 +439,12 @@ namespace ExcelReportBuilder.AddIn.Host
             StableId = string.IsNullOrWhiteSpace(stableId) ? null : stableId;
             OwnedRows = ownedRows;
             OwnedColumns = ownedColumns;
+            CanonicalBlockId = string.IsNullOrWhiteSpace(canonicalBlockId)
+                ? null
+                : canonicalBlockId;
+            CanonicalOwnershipId = string.IsNullOrWhiteSpace(canonicalOwnershipId)
+                ? null
+                : canonicalOwnershipId;
         }
 
         public string Title { get; }
@@ -441,6 +464,10 @@ namespace ExcelReportBuilder.AddIn.Host
         public int OwnedRows { get; }
 
         public int OwnedColumns { get; }
+
+        public string? CanonicalBlockId { get; }
+
+        public string? CanonicalOwnershipId { get; }
     }
 
     public sealed class ManualLayoutSnapshot

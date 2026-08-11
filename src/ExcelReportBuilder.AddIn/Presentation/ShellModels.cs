@@ -13,7 +13,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
         Checks
     }
 
-    public sealed class FieldPlacement : ObservableObject
+    public sealed class FieldPlacement : ManualEditableObject
     {
         private string _setting;
         private bool _showSubtotals;
@@ -51,31 +51,46 @@ namespace ExcelReportBuilder.AddIn.Presentation
         public string Setting
         {
             get => _setting;
-            set => SetProperty(ref _setting, value ?? string.Empty);
+            set
+            {
+                if (CanEdit) SetProperty(ref _setting, value ?? string.Empty);
+            }
         }
 
         public bool ShowSubtotals
         {
             get => _showSubtotals;
-            set => SetProperty(ref _showSubtotals, value);
+            set
+            {
+                if (CanEdit) SetProperty(ref _showSubtotals, value);
+            }
         }
 
         public string SubtotalPlacement
         {
             get => _subtotalPlacement;
-            set => SetProperty(ref _subtotalPlacement, value ?? "After members");
+            set
+            {
+                if (CanEdit) SetProperty(ref _subtotalPlacement, value ?? "After members");
+            }
         }
 
         public string MemberOrderText
         {
             get => _memberOrderText;
-            set => SetProperty(ref _memberOrderText, value ?? string.Empty);
+            set
+            {
+                if (CanEdit) SetProperty(ref _memberOrderText, value ?? string.Empty);
+            }
         }
 
         public string NumberFormat
         {
             get => _numberFormat;
-            set => SetProperty(ref _numberFormat, value ?? "General");
+            set
+            {
+                if (CanEdit) SetProperty(ref _numberFormat, value ?? "General");
+            }
         }
 
         public FieldPlacementSnapshot ToSnapshot()

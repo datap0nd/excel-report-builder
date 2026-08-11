@@ -15,18 +15,81 @@ public sealed class PowerQueryMCompilerTests
 
         Assert.Equal("Excel.CurrentWorkbook", result.SourceConnector);
         Assert.Contains("Source = Excel.CurrentWorkbook(){[Name=\"SourceData\"]}[Content]", result.Query);
+        Assert.DoesNotContain("Table.PromoteHeaders", result.Query, StringComparison.Ordinal);
         Assert.Contains("Table.SelectColumns", result.Query);
         Assert.Contains("Table.ReorderColumns", result.Query);
         Assert.Contains("Table.RenameColumns", result.Query);
-        Assert.Contains("Table.TransformColumnTypes", result.Query);
+        Assert.DoesNotContain("Table.TransformColumnTypes", result.Query, StringComparison.Ordinal);
+        Assert.Contains("Type conversions must be finite decimal numbers", result.Query);
         Assert.Contains("Table.ReplaceErrorValues", result.Query);
         Assert.Contains("Table.FillDown", result.Query);
         Assert.Contains("Table.SelectRows", result.Query);
         Assert.Contains("Date.QuarterOfYear", result.Query);
         Assert.Contains("Table.AddColumn", result.Query);
+        Assert.Contains("Text.From(_, \"en-US\")", result.Query);
+        Assert.Contains("Date.From([#\"Period\"], \"en-US\")", result.Query);
+        Assert.Contains("Decimal.From(raw, \"en-US\")", result.Query);
+        Assert.Contains("Value.Divide(left, right, Precision.Decimal)", result.Query);
         Assert.DoesNotContain("File.Contents(", result.Query, StringComparison.Ordinal);
         Assert.DoesNotContain("Web.Contents(", result.Query, StringComparison.Ordinal);
         Assert.DoesNotContain("Sql.Database(", result.Query, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Named_range_promotes_exactly_one_header_row_before_any_transform()
+    {
+        var spec = new ReportSpecV1
+        {
+            Source = new WorkbookSourceSpec
+            {
+                Kind = WorkbookSourceKind.NamedRange,
+                WorkbookObjectName = "ManagedSource",
+                HeaderRowCount = 1
+            },
+            Transforms =
+            {
+                new SelectColumnsTransform
+                {
+                    Id = "select",
+                    Columns = { "Region", "Amount" }
+                }
+            }
+        };
+
+        var result = PowerQueryMCompiler.Compile(spec);
+
+        const string rawSource =
+            "RawSource = Excel.CurrentWorkbook(){[Name=\"ManagedSource\"]}[Content]";
+        const string promotedSource =
+            "Source = Table.PromoteHeaders(RawSource, [PromoteAllScalars = true, Culture = \"en-US\"])";
+        Assert.Contains(rawSource, result.Query);
+        Assert.Contains(promotedSource, result.Query);
+        Assert.True(result.Query.IndexOf(rawSource, StringComparison.Ordinal) <
+                    result.Query.IndexOf(promotedSource, StringComparison.Ordinal));
+        Assert.True(result.Query.IndexOf(promotedSource, StringComparison.Ordinal) <
+                    result.Query.IndexOf("Table.SelectColumns(Source", StringComparison.Ordinal));
+        Assert.Equal(
+            1,
+            result.Query.Split(new[] { "Table.PromoteHeaders" }, StringSplitOptions.None).Length - 1);
+    }
+
+    [Fact]
+    public void Table_source_preserves_Excel_table_headers_without_promotion()
+    {
+        var source = new WorkbookSourceSpec
+        {
+            Kind = WorkbookSourceKind.Table,
+            WorkbookObjectName = "SourceTable",
+            HeaderRowCount = 1
+        };
+
+        var result = PowerQueryMCompiler.Compile(source, Array.Empty<TransformStep>());
+
+        Assert.Contains(
+            "Source = Excel.CurrentWorkbook(){[Name=\"SourceTable\"]}[Content]",
+            result.Query);
+        Assert.DoesNotContain("RawSource", result.Query, StringComparison.Ordinal);
+        Assert.DoesNotContain("Table.PromoteHeaders", result.Query, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -98,11 +161,105 @@ public sealed class PowerQueryMCompilerTests
 
         var result = PowerQueryMCompiler.Compile(spec);
 
-        Assert.Contains("Table.Unpivot", result.Query);
+        Assert.DoesNotContain("Table.Unpivot", result.Query, StringComparison.Ordinal);
+        Assert.Contains("Table.ExpandListColumn", result.Query);
+        Assert.Contains("Table.ExpandRecordColumn", result.Query);
+        Assert.Contains("Record.FromList({\"Revenue Jan\", [#\"Revenue Jan\"]}", result.Query);
+        Assert.Contains("Record.FromList({\"Cost Feb\", [#\"Cost Feb\"]}", result.Query);
+        Assert.Equal(
+            4,
+            result.Query.Split(new[] { "Record.FromList" }, StringSplitOptions.None).Length - 1);
         Assert.DoesNotContain("Table.Pivot", result.Query);
         Assert.Contains("\"Metric\"", result.Query);
         Assert.Contains("\"Value\"", result.Query);
         Assert.Contains("#date(2026, 1, 1)", result.Query);
+    }
+
+    [Fact]
+    public void Wide_normalization_expands_explicit_cell_records_so_null_values_remain_rows()
+    {
+        var spec = new ReportSpecV1
+        {
+            Source = new WorkbookSourceSpec { WorkbookObjectName = "SourceData" },
+            PeriodMapping = new PeriodMappingSpec
+            {
+                Id = "periods",
+                Kind = PeriodMappingKind.MonthHeaders,
+                ReportingYear = 2026,
+                KeyColumns = { "Region" },
+                Columns =
+                {
+                    Map("Jan", 1),
+                    Map("Feb", 2)
+                }
+            },
+            Transforms =
+            {
+                new NormalizePeriodsTransform { Id = "normalize", PeriodMappingId = "periods" }
+            }
+        };
+
+        var result = PowerQueryMCompiler.Compile(spec);
+
+        Assert.DoesNotContain("Table.Unpivot", result.Query, StringComparison.Ordinal);
+        Assert.DoesNotContain("Table.SelectRows", result.Query, StringComparison.Ordinal);
+        Assert.Contains("Table.AddColumn(selected, \"__erb_period_cells\"", result.Query);
+        Assert.Contains(
+            "Record.FromList({\"Jan\", [#\"Jan\"]}, {\"__erb_cell_header\", \"__erb_cell_value\"})",
+            result.Query);
+        Assert.Contains(
+            "Record.FromList({\"Feb\", [#\"Feb\"]}, {\"__erb_cell_header\", \"__erb_cell_value\"})",
+            result.Query);
+        Assert.Contains(
+            "Table.ExpandListColumn(withoutMappedColumns, \"__erb_period_cells\")",
+            result.Query);
+        Assert.Contains(
+            "Table.ExpandRecordColumn(expandedCells, \"__erb_period_cells\"",
+            result.Query);
+        Assert.Equal(
+            2,
+            result.Query.Split(new[] { "Record.FromList" }, StringSplitOptions.None).Length - 1);
+    }
+
+    [Fact]
+    public void Wide_normalization_uses_collision_safe_internal_names_and_removes_inputs_before_expansion()
+    {
+        var spec = new ReportSpecV1
+        {
+            Source = new WorkbookSourceSpec { WorkbookObjectName = "SourceData" },
+            PeriodMapping = new PeriodMappingSpec
+            {
+                Id = "periods",
+                Kind = PeriodMappingKind.MonthHeaders,
+                ReportingYear = 2026,
+                KeyColumns =
+                {
+                    "__erb_period_header",
+                    "__erb_period_cells",
+                    "__erb_cell_header",
+                    "__erb_cell_value"
+                },
+                Columns = { Map("Jan", 1) }
+            },
+            Transforms =
+            {
+                new NormalizePeriodsTransform { Id = "normalize", PeriodMappingId = "periods" }
+            }
+        };
+
+        var result = PowerQueryMCompiler.Compile(spec);
+
+        Assert.Contains("\"__erb_period_header_1\"", result.Query);
+        Assert.Contains("\"__erb_period_cells_1\"", result.Query);
+        Assert.Contains("\"__erb_cell_header_1\"", result.Query);
+        Assert.Contains("\"__erb_cell_value_1\"", result.Query);
+        int removal = result.Query.IndexOf(
+            "withoutMappedColumns = Table.RemoveColumns",
+            StringComparison.Ordinal);
+        int expansion = result.Query.IndexOf(
+            "expandedCells = Table.ExpandListColumn",
+            StringComparison.Ordinal);
+        Assert.True(removal >= 0 && expansion > removal);
     }
 
     [Fact]
@@ -215,11 +372,108 @@ public sealed class PowerQueryMCompilerTests
         Assert.Contains("Reporting year required", result.Query);
         Assert.Contains("monthNumber =", result.Query);
         Assert.DoesNotContain("Text.BeforeDelimiter", result.Query, StringComparison.Ordinal);
-        Assert.DoesNotContain("raw is number", result.Query, StringComparison.Ordinal);
+        Assert.Contains("numericCompactCandidate = raw is number", result.Query);
+        Assert.Contains("raw is number and not numericCompactCandidate", result.Query);
         Assert.Contains("parts = if text = null then {} else Text.SplitAny", result.Query);
         Assert.DoesNotContain("List.Select(Text.SplitAny(text", result.Query, StringComparison.Ordinal);
         Assert.DoesNotContain("DateTime.LocalNow", result.Query, StringComparison.Ordinal);
         Assert.DoesNotContain("Culture.Current", result.Query, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Arithmetic_uses_bounded_decimal_operands_and_explicit_whole_number_coercion()
+    {
+        var spec = new ReportSpecV1
+        {
+            Source = new WorkbookSourceSpec { WorkbookObjectName = "SourceData" },
+            Transforms =
+            {
+                new AddArithmeticColumnTransform
+                {
+                    Id = "calculate",
+                    OutputColumn = "Result",
+                    Operator = ArithmeticOperator.Multiply,
+                    Left = new ArithmeticOperand
+                    {
+                        Kind = ArithmeticOperandKind.Column,
+                        Column = "Amount"
+                    },
+                    Right = new ArithmeticOperand
+                    {
+                        Kind = ArithmeticOperandKind.Number,
+                        Number = 2.5m
+                    },
+                    ResultType = ColumnDataType.WholeNumber
+                }
+            }
+        };
+
+        var result = PowerQueryMCompiler.Compile(spec);
+
+        Assert.Contains("Text.Select(text, {\"0\"..\"9\", \"+\", \"-\", \".\", \",\", \"e\", \"E\"})", result.Query);
+        Assert.Contains("Decimal.From(raw, \"en-US\")", result.Query);
+        Assert.Contains("Decimal.From(\"2.5\", \"en-US\")", result.Query);
+        Assert.Contains("Value.Multiply(left, right, Precision.Decimal)", result.Query);
+        Assert.Contains("Int64.From(calculated, \"en-US\")", result.Query);
+        Assert.DoesNotContain("Number.From(", result.Query, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Column_type_changes_compile_the_closed_en_us_conversion_grammar()
+    {
+        var spec = new ReportSpecV1
+        {
+            Source = new WorkbookSourceSpec { WorkbookObjectName = "SourceData" },
+            Transforms =
+            {
+                new ChangeColumnTypeTransform { Id = "text", Column = "Label", DataType = ColumnDataType.Text },
+                new ChangeColumnTypeTransform { Id = "whole", Column = "Units", DataType = ColumnDataType.WholeNumber },
+                new ChangeColumnTypeTransform { Id = "decimal", Column = "Amount", DataType = ColumnDataType.DecimalNumber },
+                new ChangeColumnTypeTransform { Id = "boolean", Column = "Flag", DataType = ColumnDataType.Boolean },
+                new ChangeColumnTypeTransform { Id = "date", Column = "Day", DataType = ColumnDataType.Date },
+                new ChangeColumnTypeTransform { Id = "datetime", Column = "Stamp", DataType = ColumnDataType.DateTime }
+            }
+        };
+
+        MCompilationResult result = PowerQueryMCompiler.Compile(spec);
+
+        Assert.DoesNotContain("Table.TransformColumnTypes", result.Query, StringComparison.Ordinal);
+        Assert.Contains("Text.From(_, \"en-US\")", result.Query);
+        Assert.Contains("Decimal.From(raw, \"en-US\")", result.Query);
+        Assert.Contains("Int64.From(converted, \"en-US\")", result.Query);
+        Assert.Contains("Text.Lower(Text.Trim(_))", result.Query);
+        Assert.Contains("Date.From(raw, \"en-US\")", result.Query);
+        Assert.Contains("DateTime.From(raw, \"en-US\")", result.Query);
+        Assert.Contains("Date.FromText(text, [Format = \"M/d/yyyy\", Culture = \"en-US\"])", result.Query);
+        Assert.Contains("DateTime.FromText(text, [Format = \"M/d/yyyy h:mm:ss tt\", Culture = \"en-US\"])", result.Query);
+        Assert.Contains("Text.Select(text, {\"0\"..\"9\", \"+\", \"-\", \".\", \",\", \"e\", \"E\"})", result.Query);
+    }
+
+    [Fact]
+    public void Division_without_null_on_zero_is_rejected_during_compilation()
+    {
+        var spec = new ReportSpecV1
+        {
+            Source = new WorkbookSourceSpec { WorkbookObjectName = "SourceData" },
+            Transforms =
+            {
+                new AddArithmeticColumnTransform
+                {
+                    Id = "unsafe_divide",
+                    OutputColumn = "Result",
+                    Operator = ArithmeticOperator.Divide,
+                    Left = new ArithmeticOperand { Kind = ArithmeticOperandKind.Column, Column = "Amount" },
+                    Right = new ArithmeticOperand { Kind = ArithmeticOperandKind.Column, Column = "Units" },
+                    ResultType = ColumnDataType.DecimalNumber,
+                    ReturnNullOnZeroDenominator = false
+                }
+            }
+        };
+
+        MCompilationException exception = Assert.Throws<MCompilationException>(() =>
+            PowerQueryMCompiler.Compile(spec));
+
+        Assert.Equal("ARITHMETIC_DIVIDE_NULL_ON_ZERO_REQUIRED", exception.Code);
     }
 
     [Fact]

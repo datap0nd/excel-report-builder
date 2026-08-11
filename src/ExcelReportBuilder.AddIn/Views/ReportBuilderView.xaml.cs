@@ -24,6 +24,7 @@ namespace ExcelReportBuilder.AddIn.Views
             _viewModel = new ShellViewModel(hostService);
             DataContext = _viewModel;
             _viewModel.Activity.Entries.CollectionChanged += OnActivityEntriesChanged;
+            _viewModel.ApiKeyClearRequested += OnApiKeyClearRequested;
         }
 
         public ShellViewModel ViewModel => _viewModel;
@@ -37,6 +38,7 @@ namespace ExcelReportBuilder.AddIn.Views
 
             _disposed = true;
             _viewModel.Activity.Entries.CollectionChanged -= OnActivityEntriesChanged;
+            _viewModel.ApiKeyClearRequested -= OnApiKeyClearRequested;
             _viewModel.Dispose();
         }
 
@@ -61,6 +63,14 @@ namespace ExcelReportBuilder.AddIn.Views
             }
 
             _viewModel.SetApiKey(passwordBox.SecurePassword);
+        }
+
+        private void OnApiKeyClearRequested(object? sender, EventArgs eventArgs)
+        {
+            if (!_disposed && ApiKeyBox.Password.Length != 0)
+            {
+                ApiKeyBox.Password = string.Empty;
+            }
         }
     }
 }

@@ -31,7 +31,9 @@ public sealed class ReportBuildPlannerTests
         Assert.Contains(weighted.AggregateComponents, component => component.Role == AggregateComponentRole.WeightedDenominator
             && component.Field == "Weight");
         Assert.Contains("\"WeightedUnits\"", plan.Source.PowerQueryM);
-        Assert.Contains("Number.From([#\"Units\"]) * Number.From([#\"Weight\"])", plan.Source.PowerQueryM);
+        Assert.Contains("raw = [#\"Units\"]", plan.Source.PowerQueryM);
+        Assert.Contains("raw = [#\"Weight\"]", plan.Source.PowerQueryM);
+        Assert.Contains("Value.Multiply(left, right, Precision.Decimal)", plan.Source.PowerQueryM);
         Assert.Contains(plan.Blocks[0].Pivot.Filters, filter => filter.IsSupportingField && filter.Field == "Period");
         Assert.Contains(plan.Blocks[0].Pivot.Filters, filter => filter.IsSupportingField && filter.Field == "Units");
         Assert.Contains(plan.Blocks[0].Pivot.Filters, filter => filter.IsSupportingField && filter.Field == "Weight");
@@ -113,7 +115,7 @@ public sealed class ReportBuildPlannerTests
     }
 
     [Fact]
-    public void Row_removing_transforms_use_an_upper_bound_projection_check()
+    public void Row_removing_transforms_require_an_exact_independent_count_and_keep_total_checks()
     {
         var spec = SyntheticReportFactory.CreateValidLongSpec();
         spec.Transforms.Insert(0, new FilterRowsTransform
@@ -127,8 +129,8 @@ public sealed class ReportBuildPlannerTests
         var plan = ReportBuildPlanner.Create(spec, SyntheticReportFactory.CreateLongProfile());
 
         var rowCheck = plan.Checks.Single(check => check.Id == "mandatory-no-truncation");
-        Assert.Equal(RowCountExpectation.AtMostProjection, rowCheck.RowCountExpectation);
-        Assert.DoesNotContain(plan.Checks, check =>
+        Assert.Equal(RowCountExpectation.ExactPostTransformCount, rowCheck.RowCountExpectation);
+        Assert.Contains(plan.Checks, check =>
             check.Mandatory &&
             check.Kind == ReportCheckKind.TotalPreservation &&
             check.EvaluationScope == CheckEvaluationScope.CanonicalData);
