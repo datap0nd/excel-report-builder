@@ -151,6 +151,13 @@ jobs:
           upload-artifact: false
           upload-release-assets: false
 
+      - name: Complete missing SBOM file hashes
+        shell: pwsh
+        run: >-
+          ./scripts/Complete-ReleaseSbomFileHashes.ps1
+          -SbomPath "artifacts/ExcelReportBuilder.spdx.json"
+          -PayloadPath "artifacts/sbom-payload"
+
       - name: Validate release SBOM components and hashes
         shell: pwsh
         run: >-
