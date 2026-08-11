@@ -45,7 +45,7 @@ namespace ExcelReportBuilder.AddIn.Hosting
         [ComRegisterFunction]
         public static void Register(Type registeredType)
         {
-            string controlKeyPath = $@"CLSID\{{{registeredType.GUID:D}}}\Control";
+            string controlKeyPath = @"CLSID\" + registeredType.GUID.ToString("B") + @"\Control";
             using (RegistryKey? controlKey = Registry.ClassesRoot.CreateSubKey(controlKeyPath))
             {
                 if (controlKey == null)
@@ -58,7 +58,7 @@ namespace ExcelReportBuilder.AddIn.Hosting
         [ComUnregisterFunction]
         public static void Unregister(Type registeredType)
         {
-            string controlKeyPath = $@"CLSID\{{{registeredType.GUID:D}}}\Control";
+            string controlKeyPath = @"CLSID\" + registeredType.GUID.ToString("B") + @"\Control";
             Registry.ClassesRoot.DeleteSubKey(controlKeyPath, throwOnMissingSubKey: false);
         }
 
