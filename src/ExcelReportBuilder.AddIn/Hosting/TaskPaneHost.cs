@@ -18,24 +18,24 @@ namespace ExcelReportBuilder.AddIn.Hosting
         public const string ClassId = "A3F4E10D-0DD1-420E-8B6F-E0A654BBEA16";
 
         private readonly ElementHost _elementHost;
-        private readonly ReportBuilderView _reportBuilderView;
+        private readonly PivotPlusView _pivotPlusView;
 
         public TaskPaneHost()
         {
             AutoScaleMode = AutoScaleMode.Dpi;
             BackColor = Color.White;
-            AccessibleName = "Excel Report Builder task pane";
-            AccessibleDescription = "Choose data, build a report, use chat, and review checks.";
+            AccessibleName = "PivotTable Plus task pane";
+            AccessibleDescription = "Edit the selected native PivotTable and add validated extras.";
             AccessibleRole = AccessibleRole.Client;
             MinimumSize = new Size(320, 480);
             TabStop = true;
 
-            _reportBuilderView = new ReportBuilderView(TaskPaneBootstrapper.CreateHostService());
+            _pivotPlusView = new PivotPlusView(TaskPaneBootstrapper.CreateHostService());
             _elementHost = new ElementHost
             {
                 Dock = DockStyle.Fill,
                 BackColor = Color.White,
-                Child = _reportBuilderView,
+                Child = _pivotPlusView,
                 TabStop = true
             };
 
@@ -66,7 +66,7 @@ namespace ExcelReportBuilder.AddIn.Hosting
         {
             if (disposing)
             {
-                _reportBuilderView.Dispose();
+                _pivotPlusView.Dispose();
                 _elementHost.Child = null;
                 _elementHost.Dispose();
             }

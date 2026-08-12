@@ -9,11 +9,11 @@ namespace ExcelReportBuilder.AddIn.Hosting
     /// </summary>
     public static class TaskPaneBootstrapper
     {
-        public static Func<IReportBuilderHostService>? HostServiceFactory { get; set; }
+        public static Func<IPivotPlusHostService>? HostServiceFactory { get; set; }
 
-        internal static IReportBuilderHostService CreateHostService()
+        internal static IPivotPlusHostService CreateHostService()
         {
-            return HostServiceFactory?.Invoke() ?? new SyntheticReportBuilderHostService();
+            return HostServiceFactory?.Invoke() ?? new SyntheticPivotPlusHostService();
         }
     }
 }

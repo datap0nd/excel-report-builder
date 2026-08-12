@@ -77,8 +77,9 @@ maintaining a second grid of brittle formulas.
   independently.
 - Emit an ordered Value, percentage of immediate parent, and percentage of
   filtered total stack.
-- Apply Top N within each parent, optional Others, and an independent scoring
-  context while preserving all displayed periods.
+- Apply typed Top N against an owned measure while preserving an exact ordered
+  axis. A labeled Others member is deliberately unsupported in the first
+  package because a named set cannot create that complement member correctly.
 
 ### Advanced columns and periods
 

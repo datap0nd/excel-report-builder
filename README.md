@@ -1,99 +1,78 @@
-# Excel Report Builder
+# PivotTable+
 
-Build validated dense management reports inside Microsoft Excel with manual
-controls and an optional local AI agent.
+PivotTable+ is a Windows Excel add-in that enhances a real native PivotTable.
+Excel's PivotTable, Analyze/Design tabs, refresh behavior, and built-in Fields
+pane remain usable. The add-in supplies a compact companion pane for previewed
+field placement and advanced features such as parent portions, typed Data Model
+measures, and asymmetric named sets.
 
-Excel Report Builder is a Windows add-in for analysts who receive a raw extract
-and need a repeatable report with period columns, nested rows, subtotals,
-ratios, comparisons, and explicit checks. The source remains unchanged. Native
-PivotTables perform base aggregation, while a deterministic layout layer builds
-the finished management report in a managed draft.
+The default result is always one refreshable PivotTable. Supported features do
+not create a formula-backed companion report.
 
-## Project status
+## Current status
 
-The `v0.1.0` prototype implements:
+The development branch includes:
 
-- long-date and wide Jan-Dec source detection;
-- one-row metric-month normalization;
-- worksheet and Excel Data Model paths without silent truncation;
-- manual Data, Rows, Columns, Values, Filters, formatting, and checks;
-- dense report blocks backed by native PivotTables;
-- an OpenAI-compatible local agent that edits the same report specification;
-- continuous, specific build feedback and cancellation;
-- managed drafts that require a user action before publishing.
+- selected-PivotTable discovery for worksheet, Data Model, and external OLAP
+  sources;
+- a familiar Rows, Columns, Values, and Filters pane with explicit preview and
+  Apply;
+- a direct button for Excel's built-in PivotTable Fields pane;
+- verified classic-to-Data-Model enablement with durable recovery;
+- typed DAX measures for ratios, portions, variance, comparisons, and period
+  slices;
+- typed MDX named sets for exact ordering and asymmetric branches;
+- one combined transactional refresh, verification, rollback, and session Undo;
+- per-workbook ownership metadata containing hashes and identifiers, never DAX,
+  MDX, workbook paths, prompts, or source values.
 
-It does not use SQL, join unrelated sources, save workbooks automatically, or
-give the model arbitrary Excel, formula, VBA, shell, or filesystem access.
+The package is an unsigned prototype. Use generated or disposable workbooks
+until the live-host release matrix is complete.
 
 ## Install
 
-Download the unsigned setup executable and matching SHA-256 file from
-[GitHub Releases](https://github.com/datap0nd/excel-report-builder/releases).
-Verify the checksum, close Excel, and run setup. Installation is per user and
-does not request administrator rights. The prototype is unsigned, so Windows
-will show an unknown-publisher warning.
+Download the setup executable and matching SHA-256 file from
+[GitHub Releases](https://github.com/datap0nd/excel-report-builder/releases),
+verify the checksum, close Excel, and run setup. Installation is per-user and
+does not require administrator rights. Windows may show an unknown-publisher
+warning because the prototype is not Authenticode-signed.
 
-> **Release note:** the published `v0.1.0` installer predates the Office COM
-> callback ABI repair in the current source. Use a later patch release when
-> available; do not reinstall the original asset over a repaired development
-> installation.
-
-Open Excel and choose **Excel Report Builder** on the ribbon. The default path
-is manual and does not need a model. Chat requires an OpenAI-compatible
-endpoint and an editable model ID. No model is bundled.
-
-## Workflow
-
-1. Select one table or rectangular range with one header row.
-2. Confirm the detected long or wide period layout. Month-only headers require
-   an explicit reporting year.
-3. Add bounded preparation steps, then place fields in Rows, Columns, Values,
-   and Filters.
-4. Add calculated metrics, report blocks, layout controls, and report-specific
-   checks, or ask Chat to propose the same typed report setup.
-5. Build a managed draft, review the activity timeline and checks, then publish
-   with an explicit click. The add-in never saves the workbook automatically.
+Open Excel and choose **PivotTable+** on the Data tab. Select a cell inside an
+existing PivotTable and choose Refresh in the pane. Standard edits may be made
+with Excel's native Field List or previewed in PivotTable+. Advanced extras
+require a Data Model PivotTable; the pane offers an explicit enablement action
+for supported classic worksheet-backed PivotTables.
 
 ## Platform
 
 - Windows 10 or newer
-- Microsoft Excel LTSC 2021 or compatible classic desktop Excel
+- Microsoft Excel LTSC 2021 or compatible Microsoft 365 desktop Excel
 - 32-bit or 64-bit Office
 - .NET Framework 4.8 for the in-process add-in
-- Optional OpenAI-compatible model endpoint for Chat
+
+Excel for the web and macOS are outside the first package because the required
+Data Model, DAX, MDX, and COM APIs are desktop capabilities.
 
 ## Development
-
-Windows development prerequisites:
-
-- Visual Studio 2022 Build Tools with the .NET desktop workload
-- .NET 8 SDK
-- .NET Framework 4.8 targeting pack
-- Inno Setup 6 for installer builds
-
-Build and test:
 
 ```powershell
 dotnet restore ExcelReportBuilder.sln
 dotnet build ExcelReportBuilder.sln -c Release --no-restore
 dotnet test ExcelReportBuilder.sln -c Release --no-build
-powershell -NoProfile -File scripts/Test-PublicSafety.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Test-TaskPaneContract.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Test-PublicSafety.ps1
 ```
 
-The current synthetic suite covers source profiling, period normalization,
-Power Query generation, pivot planning, dense rendering, reconciliation,
-ownership, publishing, agent permissions, endpoint policy, progress ordering,
-checkpointing, cancellation, and resume behavior.
-
-See [known limitations](docs/known-limitations.md) before using the unsigned
+See [PRODUCT.md](PRODUCT.md) for the native-first product contract and
+[docs/known-limitations.md](docs/known-limitations.md) before using the unsigned
 prototype on important workbooks.
 
 ## Privacy and safety
 
-The repository contains generated synthetic fixtures only. Do not attach or
-commit real workbooks, exports, screenshots, prompts, transcripts, endpoints,
-credentials, or company-specific report material. See [SECURITY.md](SECURITY.md)
-and [docs/public-safety.md](docs/public-safety.md).
+This public repository uses generated synthetic fixtures only. Do not commit
+real workbooks, exports, screenshots, prompts, transcripts, endpoints,
+credentials, or company-specific material. See [SECURITY.md](SECURITY.md) and
+[docs/public-safety.md](docs/public-safety.md).
 
 ## License
 

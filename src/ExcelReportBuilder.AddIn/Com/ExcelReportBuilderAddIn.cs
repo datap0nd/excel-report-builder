@@ -23,7 +23,7 @@ namespace ExcelReportBuilder.AddIn.Com
         public const string ClassId = "F953480C-A73C-4121-9E21-18676EC34CE8";
 
         private const string AddInRegistryPath = @"Software\Microsoft\Office\Excel\Addins\" + ProgramId;
-        private const string TaskPaneTitle = "Excel Report Builder";
+        private const string TaskPaneTitle = "PivotTable+";
         private const int DefaultTaskPaneWidth = 420;
 
         private object? _application;
@@ -47,7 +47,7 @@ namespace ExcelReportBuilder.AddIn.Com
             _application = application;
             _addInInstance = addInInstance;
             TaskPaneBootstrapper.HostServiceFactory =
-                () => new ExcelReportBuilderHostService(application);
+                () => new ExcelPivotPlusHostService(application);
         }
 
         public void OnDisconnection(ExtDisconnectMode removeMode, ref Array custom)
@@ -112,6 +112,19 @@ namespace ExcelReportBuilder.AddIn.Com
             return _taskPaneFactory != null;
         }
 
+        public void OnOpenExcelFieldList(object control)
+        {
+            if (LateBoundCom.TryGetProperty(_application, "CommandBars", out object? commandBars))
+            {
+                LateBoundCom.TryInvoke(commandBars, "ExecuteMso", "PivotFieldListShowHide");
+            }
+        }
+
+        public bool GetPivotActionEnabled(object control)
+        {
+            return _application != null;
+        }
+
         [ComRegisterFunction]
         public static void Register(Type registeredType)
         {
@@ -122,8 +135,8 @@ namespace ExcelReportBuilder.AddIn.Com
                     throw new InvalidOperationException("Could not create the per-user Excel add-in registration key.");
                 }
 
-                key.SetValue("Description", "Build checked dense management reports from workbook data.");
-                key.SetValue("FriendlyName", "Excel Report Builder");
+                key.SetValue("Description", "Enhance a selected native Excel PivotTable.");
+                key.SetValue("FriendlyName", "PivotTable+");
                 key.SetValue("LoadBehavior", 3, RegistryValueKind.DWord);
             }
         }

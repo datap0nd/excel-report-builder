@@ -31,7 +31,7 @@
 10. [x] Implement workbook DAX measure authoring and ordered MDX named sets for
     ratios, comparisons, period selections, asymmetric branches, and custom
     row/column order inside a real Excel PivotTable.
-11. [ ] Replace the Data/Build/Chat/Checks workbench with a compact,
+11. [x] Replace the Data/Build/Chat/Checks workbench with a compact,
     keyboard-accessible PivotTable+ task pane and contextual Ribbon actions
     that operate on the selected native PivotTable.
 12. [ ] Reframe the guarded local-model worker around typed PivotTable+ actions,

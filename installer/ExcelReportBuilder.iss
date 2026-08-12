@@ -34,7 +34,7 @@ CloseApplicationsFilter=excel.exe
 RestartApplications=no
 UninstallDisplayName={#AppName} {#AppVersion} (unsigned prototype)
 VersionInfoVersion={#AppVersion}
-VersionInfoDescription=Unsigned prototype for building validated dense management reports in Excel
+VersionInfoDescription=Unsigned prototype for enhancing native Excel PivotTables
 VersionInfoProductName={#AppName}
 VersionInfoCompany={#AppPublisher}
 AppComments=Unsigned prototype. Verify the published SHA-256 checksum before installation.
@@ -65,8 +65,8 @@ Root: HKCU32; Subkey: "Software\Classes\CLSID\{#AppClsid}\ProgId"; ValueType: st
 Root: HKCU32; Subkey: "Software\Classes\CLSID\{#AppClsid}\Implemented Categories\{#ManagedCategory}"; ValueType: string; ValueName: ""; ValueData: ""
 Root: HKCU32; Subkey: "Software\Classes\{#AppProgId}"; ValueType: string; ValueName: ""; ValueData: "{#AppName}"; Flags: uninsdeletekey
 Root: HKCU32; Subkey: "Software\Classes\{#AppProgId}\CLSID"; ValueType: string; ValueName: ""; ValueData: "{#AppClsid}"
-Root: HKCU32; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: string; ValueName: "FriendlyName"; ValueData: "{#AppName}"; Flags: uninsdeletekey
-Root: HKCU32; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: string; ValueName: "Description"; ValueData: "Build validated dense management reports from one workbook source."
+Root: HKCU32; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: string; ValueName: "FriendlyName"; ValueData: "PivotTable+"; Flags: uninsdeletekey
+Root: HKCU32; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: string; ValueName: "Description"; ValueData: "Enhance a selected native Excel PivotTable."
 Root: HKCU32; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: dword; ValueName: "LoadBehavior"; ValueData: "3"
 Root: HKCU32; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: dword; ValueName: "CommandLineSafe"; ValueData: "0"
 
@@ -105,8 +105,8 @@ Root: HKCU64; Subkey: "Software\Classes\CLSID\{#AppClsid}\ProgId"; ValueType: st
 Root: HKCU64; Subkey: "Software\Classes\CLSID\{#AppClsid}\Implemented Categories\{#ManagedCategory}"; ValueType: string; ValueName: ""; ValueData: ""; Check: IsWin64
 Root: HKCU64; Subkey: "Software\Classes\{#AppProgId}"; ValueType: string; ValueName: ""; ValueData: "{#AppName}"; Flags: uninsdeletekey; Check: IsWin64
 Root: HKCU64; Subkey: "Software\Classes\{#AppProgId}\CLSID"; ValueType: string; ValueName: ""; ValueData: "{#AppClsid}"; Check: IsWin64
-Root: HKCU64; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: string; ValueName: "FriendlyName"; ValueData: "{#AppName}"; Flags: uninsdeletekey; Check: IsWin64
-Root: HKCU64; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: string; ValueName: "Description"; ValueData: "Build validated dense management reports from one workbook source."; Check: IsWin64
+Root: HKCU64; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: string; ValueName: "FriendlyName"; ValueData: "PivotTable+"; Flags: uninsdeletekey; Check: IsWin64
+Root: HKCU64; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: string; ValueName: "Description"; ValueData: "Enhance a selected native Excel PivotTable."; Check: IsWin64
 Root: HKCU64; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: dword; ValueName: "LoadBehavior"; ValueData: "3"; Check: IsWin64
 Root: HKCU64; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: dword; ValueName: "CommandLineSafe"; ValueData: "0"; Check: IsWin64
 

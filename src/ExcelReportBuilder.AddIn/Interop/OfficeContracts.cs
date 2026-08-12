@@ -124,5 +124,11 @@ namespace ExcelReportBuilder.AddIn.Interop
 
         [DispId(4)]
         bool GetTaskPaneEnabled([MarshalAs(UnmanagedType.IDispatch)] object control);
+
+        [DispId(5)]
+        void OnOpenExcelFieldList([MarshalAs(UnmanagedType.IDispatch)] object control);
+
+        [DispId(6)]
+        bool GetPivotActionEnabled([MarshalAs(UnmanagedType.IDispatch)] object control);
     }
 }

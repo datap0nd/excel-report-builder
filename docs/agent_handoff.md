@@ -2,22 +2,23 @@
 
 ## Current Objective
 
-Tasks 1-10 are complete on `codex/pivottable-plus`. Task 10 adds typed DAX
-measure compilation, typed MDX named-set compilation, exact host mutation, one
-combined semantic transaction, and complete Rows/Columns/Values placement in
-one real Data Model PivotTable.
+Tasks 1-11 are complete on `codex/pivottable-plus`. Task 11 replaces the old
+workbench at the COM composition boundary with the compact, keyboard-accessible
+PivotTable+ pane and Ribbon actions. A local unsigned 0.2.0.1 candidate is
+installed and registered on the development PC.
 
-The next numbered task is Task 11: replace the old workbench with the compact,
-keyboard-accessible PivotTable+ task pane and contextual Ribbon actions.
+The next numbered task is Task 12: reframe the optional local-model workflow as
+a typed PivotTable+ proposal and preview flow. It must not apply without an
+explicit user action.
 
 ## Repository State
 
 - Branch: `codex/pivottable-plus`
-- Tasks 1-10 in `plan.md` are complete; Tasks 11-14 remain.
+- Tasks 1-11 in `plan.md` are complete; Tasks 12-14 remain.
 - Task 9 was implemented and verified without controlling the Excel UI or using
   computer automation. All repository evidence uses generated synthetic data
   and generic names.
-- The PivotTable+ rebuild remains intentionally incomplete until Tasks 10-14
+- The PivotTable+ rebuild remains intentionally incomplete until Tasks 12-14
   are implemented and verified.
 
 ## Task 9 Product Contract
@@ -177,6 +178,31 @@ keyboard-accessible PivotTable+ task pane and contextual Ribbon actions.
   references, and hashes for pending Measure and NamedSet transitions. Tests
   assert that DAX and MDX never enter Custom XML.
 
+## Task 11 Pane and Local Installation
+
+- The COM task-pane host now composes `PivotPlusView` and
+  `ExcelPivotPlusHostService`; the old report workbench is no longer reachable
+  from the Ribbon or task-pane bootstrapper.
+- The pane reads only the PivotTable under the active cell, searches its field
+  catalog, shows familiar Filters/Columns/Rows/Values areas, and holds edits as
+  a preview until the user chooses Apply.
+- Excel's built-in PivotTable Fields pane remains the primary drag-and-drop
+  workflow and is available from both the PivotTable+ pane and Ribbon.
+- An explicit Enable PivotTable+ action invokes the verified Task 9
+  classic-to-Data-Model conversion. The first visible extra is a typed parent
+  Portion measure with session Undo; it never accepts raw DAX or creates a
+  helper table.
+- The rendered 420-by-900 synthetic pane was inspected. The task-pane contract,
+  COM contract, public-safety check, dual-target AddIn build, and the full 1,025
+  test suite pass.
+- Inno Setup 6.7.1 built unsigned candidate `0.2.0.1`. Installation completed
+  without a Windows restart. Installed AddIn/Core/Excel/Agent DLL hashes match
+  the Release payload, both registry views have `FriendlyName=PivotTable+` and
+  `LoadBehavior=3`, and both 32-bit and 64-bit PowerShell successfully activate
+  the add-in and ActiveX task-pane COM classes.
+- No Excel UI was controlled during verification. The user must perform the
+  final visible open-pane and PivotTable interaction check.
+
 ## Remaining Boundary and Next Step
 
 - Automated tests use synthetic late-bound hosts and do not replace live Excel
@@ -185,9 +211,6 @@ keyboard-accessible PivotTable+ task pane and contextual Ribbon actions.
   Task 14. The main host risks are COM/RCW identity behavior, Values
   pseudo-field placement, PivotCache replacement, provider and Data Model
   differences, refresh timing, and rollback after real-host COM failures.
-- Task 11 now adds the familiar PivotTable+ pane over the completed native and
-  semantic layers. It must preserve the built-in Field List workflow and expose
-  only compact Extras, preview, Apply, and Undo controls.
 - Task 12 will map local-model requests to the same typed calculations, named
   sets, and layout plan. It must not expose arbitrary DAX, MDX, formulas, COM,
   filesystem, save, publish, or deletion capabilities to the model.

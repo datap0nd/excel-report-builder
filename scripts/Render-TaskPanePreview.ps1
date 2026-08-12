@@ -10,7 +10,7 @@ New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
 $outputPath = Join-Path $outputDirectory "task-pane-preview.png"
 
 $assembly = [Reflection.Assembly]::LoadFrom($assemblyPath)
-$viewType = $assembly.GetType("ExcelReportBuilder.AddIn.Views.ReportBuilderView", $true)
+$viewType = $assembly.GetType("ExcelReportBuilder.AddIn.Views.PivotPlusView", $true)
 $view = [Activator]::CreateInstance($viewType)
 try {
     $view.Width = 420
