@@ -200,7 +200,9 @@ function Get-FileEvidencePackages {
 $expectedComponents = @(
     [pscustomobject]@{
         RelativePath = "addin/ExcelReportBuilder.AddIn.dll"
-        PackageNames = @("Excel Report Builder")
+        # The COM host is deliberately branded PivotTable+ while the shared
+        # libraries and root release package retain the repository product name.
+        PackageNames = @("PivotTable+")
         RuntimePackageName = $null
     },
     [pscustomobject]@{

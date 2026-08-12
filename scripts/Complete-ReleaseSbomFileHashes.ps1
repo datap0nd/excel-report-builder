@@ -73,7 +73,10 @@ foreach ($relativePath in @($payloadInventory.ByPath.Keys | Sort-Object)) {
 }
 
 $json = $document | ConvertTo-Json -Depth 100
-Set-Content -LiteralPath $resolvedSbom -Value $json -Encoding utf8NoBOM
+[IO.File]::WriteAllText(
+    $resolvedSbom,
+    $json,
+    [Text.UTF8Encoding]::new($false))
 Write-Host (
     "Completed SHA-256 coverage for {0} payload files; added {1} missing hashes." -f
     $payloadInventory.Count,
