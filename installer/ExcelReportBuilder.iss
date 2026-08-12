@@ -1,6 +1,6 @@
 #define AppName "Excel Report Builder"
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #define AppVersion "0.2.0"
 #endif
 #define AppPublisher "Excel Report Builder contributors"
 #define AppProgId "ExcelReportBuilder.AddIn"
@@ -9,8 +9,8 @@
 #define PaneClsid "{{A3F4E10D-0DD1-420E-8B6F-E0A654BBEA16}"
 #define ManagedCategory "{{62C8FE65-4EBB-45E7-B440-6E39B2CDBF29}"
 #define ControlCategory "{{40FC6ED4-2438-11CF-A3DB-080036F12502}"
-#define AssemblyVersion "0.1.0.0"
-#define AssemblyName "ExcelReportBuilder.AddIn, Version=0.1.0.0, Culture=neutral, PublicKeyToken=null"
+#define AssemblyVersion "0.2.0.0"
+#define AssemblyName "ExcelReportBuilder.AddIn, Version=0.2.0.0, Culture=neutral, PublicKeyToken=null"
 
 [Setup]
 AppId={{6A0B5710-1CD6-4F13-BE63-0E05B6860547}
@@ -34,7 +34,7 @@ CloseApplicationsFilter=excel.exe
 RestartApplications=no
 UninstallDisplayName={#AppName} {#AppVersion} (unsigned prototype)
 VersionInfoVersion={#AppVersion}
-VersionInfoDescription=Unsigned prototype for building validated dense management reports in Excel
+VersionInfoDescription=Unsigned prototype for enhancing native Excel PivotTables
 VersionInfoProductName={#AppName}
 VersionInfoCompany={#AppPublisher}
 AppComments=Unsigned prototype. Verify the published SHA-256 checksum before installation.
@@ -65,8 +65,8 @@ Root: HKCU32; Subkey: "Software\Classes\CLSID\{#AppClsid}\ProgId"; ValueType: st
 Root: HKCU32; Subkey: "Software\Classes\CLSID\{#AppClsid}\Implemented Categories\{#ManagedCategory}"; ValueType: string; ValueName: ""; ValueData: ""
 Root: HKCU32; Subkey: "Software\Classes\{#AppProgId}"; ValueType: string; ValueName: ""; ValueData: "{#AppName}"; Flags: uninsdeletekey
 Root: HKCU32; Subkey: "Software\Classes\{#AppProgId}\CLSID"; ValueType: string; ValueName: ""; ValueData: "{#AppClsid}"
-Root: HKCU32; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: string; ValueName: "FriendlyName"; ValueData: "{#AppName}"; Flags: uninsdeletekey
-Root: HKCU32; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: string; ValueName: "Description"; ValueData: "Build validated dense management reports from one workbook source."
+Root: HKCU32; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: string; ValueName: "FriendlyName"; ValueData: "PivotTable+"; Flags: uninsdeletekey
+Root: HKCU32; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: string; ValueName: "Description"; ValueData: "Enhance a selected native Excel PivotTable."
 Root: HKCU32; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: dword; ValueName: "LoadBehavior"; ValueData: "3"
 Root: HKCU32; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: dword; ValueName: "CommandLineSafe"; ValueData: "0"
 
@@ -105,8 +105,8 @@ Root: HKCU64; Subkey: "Software\Classes\CLSID\{#AppClsid}\ProgId"; ValueType: st
 Root: HKCU64; Subkey: "Software\Classes\CLSID\{#AppClsid}\Implemented Categories\{#ManagedCategory}"; ValueType: string; ValueName: ""; ValueData: ""; Check: IsWin64
 Root: HKCU64; Subkey: "Software\Classes\{#AppProgId}"; ValueType: string; ValueName: ""; ValueData: "{#AppName}"; Flags: uninsdeletekey; Check: IsWin64
 Root: HKCU64; Subkey: "Software\Classes\{#AppProgId}\CLSID"; ValueType: string; ValueName: ""; ValueData: "{#AppClsid}"; Check: IsWin64
-Root: HKCU64; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: string; ValueName: "FriendlyName"; ValueData: "{#AppName}"; Flags: uninsdeletekey; Check: IsWin64
-Root: HKCU64; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: string; ValueName: "Description"; ValueData: "Build validated dense management reports from one workbook source."; Check: IsWin64
+Root: HKCU64; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: string; ValueName: "FriendlyName"; ValueData: "PivotTable+"; Flags: uninsdeletekey; Check: IsWin64
+Root: HKCU64; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: string; ValueName: "Description"; ValueData: "Enhance a selected native Excel PivotTable."; Check: IsWin64
 Root: HKCU64; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: dword; ValueName: "LoadBehavior"; ValueData: "3"; Check: IsWin64
 Root: HKCU64; Subkey: "Software\Microsoft\Office\Excel\Addins\{#AppProgId}"; ValueType: dword; ValueName: "CommandLineSafe"; ValueData: "0"; Check: IsWin64
 

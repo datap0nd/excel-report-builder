@@ -1,87 +1,190 @@
 # Architecture
 
-## Trust boundary
+## System boundary
 
-Excel Report Builder separates model inference from Excel mutation.
+PivotTable+ is an authoring layer over a real Excel PivotTable. It does not own
+the aggregation grid and does not render a formula-backed companion report.
 
 ```text
-Excel ribbon and task pane
-        |
-        v
-Validated ReportSpecV1
-        |
-        +----> deterministic transform and report compiler
-        |                |
-        |                v
-        |        owned Excel objects only
-        |
-        +----> authenticated one-use pipe ----> local agent worker
-                                              |
-                                              v
-                                  OpenAI-compatible endpoint
+Built-in Excel Field List              PivotTable+ task pane / Ribbon
+            |                                      |
+            +------------------+-------------------+
+                               v
+                    typed PivotPlusSpecV1 plan
+                               |
+             +-----------------+------------------+
+             |                 |                  |
+             v                 v                  v
+      standard Pivot       DAX compiler       MDX set compiler
+       object model             |                  |
+             |                  v                  v
+             |          ModelMeasures.Add   CalculatedMembers.Add
+             |                                   + CubeFields.AddSet
+             +-----------------+------------------+
+                               v
+                    one native Excel PivotTable
 ```
 
-The worker never receives an Excel application object and cannot execute
-formulas, VBA, COM calls, shell commands, workbook saves, publishing, deletion,
-or arbitrary filesystem operations. It proposes only typed report-specification
-changes and allowlisted job operations. Its only local write is bounded,
-non-sensitive checkpoint metadata under the current user's application-data
-directory. The add-in validates every request and owns the complete Excel
-execution path.
+## Compatibility chassis
 
-Each job uses a fresh random pipe name and a 256-bit launch secret inherited by
-the child process. The worker proves that secret with an HMAC over the pipe,
-nonce, and protocol version before sensitive payloads are sent. The secret is
-not placed on the command line, and the worker exits after its one connection.
+The rebuild keeps the already verified .NET Framework 4.8 COM bootstrap,
+Office callback ABI, WinForms/ElementHost task-pane control, per-user x86/x64
+registration, installer, and authenticated out-of-process worker. Assembly
+names, ProgIDs, CLSIDs, and the installer application ID remain stable during
+the product migration.
+
+The former dense-report specification, renderer, publishing transaction, and
+four-surface workbench are not part of the new runtime path.
 
 ## Projects
 
-- `ExcelReportBuilder.Core`: versioned specifications, source profiling,
-  transformation plans, measure expressions, compilation, and validation.
-- `ExcelReportBuilder.Excel`: late-bound Excel execution, object ownership,
-  PivotTables, managed drafts, persistence, publishing, and rollback.
-- `ExcelReportBuilder.Agent`: endpoint policy, tool protocol, job state, model
-  client, and agent orchestration shared by the add-in and worker.
-- `ExcelReportBuilder.Worker`: out-of-process model and planning host.
-- `ExcelReportBuilder.AddIn`: COM entry point, ribbon, task pane, manual builder,
-  Chat, Checks, progress, and cancellation.
+- `ExcelReportBuilder.Core`: temporary compatibility project name containing
+  PivotTable+ specifications, typed measures, period semantics, compilers, and
+  validation. It contains no COM objects.
+- `ExcelReportBuilder.Excel`: active PivotTable discovery, capability
+  inspection, native mutations, Data Model enablement, ownership metadata,
+  refresh verification, and rollback.
+- `ExcelReportBuilder.Agent`: endpoint policy, typed PivotTable+ tool schemas,
+  prompt construction, response validation, and orchestration.
+- `ExcelReportBuilder.Worker`: authenticated one-use out-of-process model host.
+- `ExcelReportBuilder.AddIn`: COM entry point, Ribbon, compact task pane,
+  preview/apply/undo commands, progress, and cancellation.
 
-## Data flow
+Project and assembly renaming is deliberately separated from behavior changes
+so installation compatibility is not put at risk.
 
-1. The user selects a table or rectangular source range.
-2. The source profiler inspects headers and bounded samples without modifying
-   values.
-3. Period detection proposes a long-date or wide metric-month mapping.
-4. A typed transformation plan compiles to a restricted workbook query that
-   can reference only the selected source.
-5. Normalized data loads to a managed worksheet table when it fits, otherwise
-   to Excel's Data Model.
-6. The report compiler creates a backend-neutral pivot and layout plan.
-7. The Excel executor builds hidden or visible native PivotTables and renders
-   only managed draft sheets.
-   Before rendering, it clears each active owned draft and removes stale draft
-   and hidden-pivot sheets belonging to removed outputs or blocks for the same
-   report only.
-8. An independent validation plan reconciles row counts, totals, periods,
-   subtotals, ratios, formulas, and refresh state. Dense formula values are
-   evaluated independently from typed measure nodes and direct PivotTable
-   aggregate reads for every block.
-9. Publishing remains a user action and never saves the workbook. The publish
-   transaction freezes formulas to values, stages every final and rollback,
-   compensates the complete batch on failure, and retires removed managed
-   outputs only after every replacement succeeds.
+## Core specification
 
-## Large-data behavior
+`PivotPlusSpecV1` identifies a target PivotTable without a workbook path and
+contains only typed operations:
 
-Projected normalized row count determines the backend before a refresh begins.
-The worksheet backend is used only when the complete result fits. Larger
-results use the Data Model. A successful job always records source,
-normalization, pivot, and finished-output row counts. Truncation is never an
-accepted fallback.
+- ordinary field placements and native layout settings;
+- measure definitions expressed as validated expression nodes;
+- ordered period/scenario outputs;
+- asymmetric axis branches and exact member paths;
+- filters, Top N scoring context, and member order;
+- labels, number formats, subtotal and grand-total behavior.
 
-## Continuous feedback
+Raw DAX or MDX is not part of the public specification and cannot be supplied
+by a model. Deterministic compilers are the sole source of executable formulas.
 
-Every operation emits typed progress events with stage, message, elapsed time,
-optional counts, object identity, and completed checks. A heartbeat fills quiet
-periods while the host remains responsive. Progress is part of the protocol and
-test contract, not task-pane decoration.
+## Pivot capabilities
+
+The context resolver classifies the selected PivotTable as:
+
+| Source | Standard edits | DAX measures | Named sets |
+| --- | --- | --- | --- |
+| Classic worksheet/range | Yes | After explicit Data Model enablement | After explicit Data Model enablement |
+| Excel Data Model | Yes | Yes | Yes |
+| External OLAP | Yes, provider permitting | No workbook DAX; provider/private MDX rules apply | Yes, provider permitting |
+
+Capability checks occur before preview. A plan that exceeds the current source
+is rejected or offers an explicit conversion; it never changes backend
+silently.
+
+## Native mutation transaction
+
+Every Apply follows one coordinator:
+
+1. Resolve and revalidate the active PivotTable identity and capabilities.
+2. Load the last saved PivotTable+ metadata and verify artifact ownership.
+3. Snapshot affected field orientations, filters, measures, named sets, style,
+   and totals.
+4. Set a depth-based event/reentrancy guard and preserve `ManualUpdate`.
+5. Upsert owned DAX measures using native model format objects.
+6. Upsert owned MDX named sets, expose them with `CubeFields.AddSet`, and place
+   them on the requested axis.
+7. Apply ordinary field, filter, order, total, and formatting changes.
+8. Restore update state, refresh once, reacquire COM objects, and verify native
+   fields, values, ordering, and metadata.
+9. Commit the ownership record and bounded undo snapshot.
+10. On any failure, restore the snapshot and remove only newly created owned
+    artifacts.
+
+The user's PivotTable is a mutation target, never an owned object. A measure or
+set with the requested name but a different ownership fingerprint is a hard
+collision.
+
+## Data Model enablement
+
+Advanced actions on a classic PivotTable require an explicit enablement
+transaction. The source is inspected and, if necessary, represented as a
+managed query/model connection. PivotTable layout, filters, formatting, and
+location are snapshotted before a Data Model PivotTable is created or rebound.
+The original remains recoverable until refresh and semantic verification pass.
+
+No claim is made that Excel can toggle an ordinary PivotCache into a Data Model
+cache in place.
+
+## DAX measures
+
+Typed expression nodes support aggregate, filtered aggregate, weighted result,
+reference, constant, arithmetic, safe divide, ratio, difference, share,
+variance, growth, achievement, and percentage-point delta. A dependency graph
+is validated for missing references and cycles before compilation.
+
+The Excel adapter uses `Workbook.Model.ModelMeasures.Add` for new measures and
+updates owned measures in place when safe. `FormatInformation` is a native
+`ModelFormat*` object, not a format string. Associated table, display name,
+description, and format are part of the ownership fingerprint.
+
+## Asymmetric named sets
+
+An asymmetric axis is represented as an ordered list of validated member
+paths/tuples plus display and hierarchy options. The compiler escapes names and
+members and emits MDX only after every referenced hierarchy and member is
+resolved against the current cube schema.
+
+The Excel adapter uses `CalculatedMembers.Add` with `xlCalculatedSet`, then
+`CubeFields.AddSet` before orientation and position are assigned. Excel does
+not apply ordinary filters directly to named sets, so an advanced branch edit
+regenerates its owned set. Ordinary report filters and slicers remain native
+when their semantics are compatible.
+
+## Agent trust boundary
+
+```text
+bounded Pivot snapshot + user request
+                |
+                v
+ authenticated one-use pipe -> local model worker
+                |                     |
+                |                     v
+                |          typed action proposal only
+                +---------------------+
+                v
+ deterministic validation and preview
+                |
+          explicit user Apply
+                v
+ native mutation transaction
+```
+
+The worker never receives an Excel application object. It cannot execute DAX,
+MDX, worksheet formulas, VBA, COM, shell, filesystem, save, publish, delete,
+email, or arbitrary network operations. Credentials are protected for the
+current Windows user and transferred only after one-use HMAC authentication.
+
+## Persistence
+
+Workbook Custom XML stores path-free PivotTable+ metadata:
+
+- workbook identity and target sheet/PivotTable names;
+- source and cube-schema fingerprints;
+- owned measure/set/query/connection identifiers and definition fingerprints;
+- the typed setup and last bounded undo snapshot;
+- format version and migration state.
+
+The workbook remains refreshable and readable without the add-in. Native model
+measures and sets remain workbook objects; only editing conveniences disappear.
+
+## Verification gates
+
+- Unit tests for specifications, dependency graphs, DAX/MDX escaping and golden
+  compilation, period grain, scoped branches, and plan validation.
+- Fake-COM tests for exact call order, capability checks, idempotency,
+  reentrancy, ownership collisions, rollback, and refresh/reacquire behavior.
+- Static COM ABI, Ribbon, task-pane, installer, SBOM, and public-safety checks.
+- User-operated smoke matrix on Excel LTSC 2021 and Microsoft 365 using only
+  generated synthetic data: native Field List visibility, values/order,
+  refresh, save/reopen, add-in-disabled behavior, and owned-only cleanup.

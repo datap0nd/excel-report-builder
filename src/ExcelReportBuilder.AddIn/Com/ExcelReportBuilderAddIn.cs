@@ -23,12 +23,12 @@ namespace ExcelReportBuilder.AddIn.Com
         public const string ClassId = "F953480C-A73C-4121-9E21-18676EC34CE8";
 
         private const string AddInRegistryPath = @"Software\Microsoft\Office\Excel\Addins\" + ProgramId;
-        private const string TaskPaneTitle = "Excel Report Builder";
+        private const string TaskPaneTitle = "PivotTable+";
         private const int DefaultTaskPaneWidth = 420;
 
         private object? _application;
         private object? _addInInstance;
-        private object? _taskPaneFactory;
+        private ICTPFactory? _taskPaneFactory;
         private object? _taskPane;
         private object? _ribbonUi;
         private bool _showWhenFactoryIsReady;
@@ -47,17 +47,13 @@ namespace ExcelReportBuilder.AddIn.Com
             _application = application;
             _addInInstance = addInInstance;
             TaskPaneBootstrapper.HostServiceFactory =
-                () => new ExcelReportBuilderHostService(application);
+                () => new ExcelPivotPlusHostService(application);
         }
 
         public void OnDisconnection(ExtDisconnectMode removeMode, ref Array custom)
         {
             TaskPaneBootstrapper.HostServiceFactory = null;
             TearDownTaskPane();
-            LateBoundCom.FinalRelease(_ribbonUi);
-            LateBoundCom.FinalRelease(_taskPaneFactory);
-            LateBoundCom.FinalRelease(_addInInstance);
-            LateBoundCom.FinalRelease(_application);
 
             _ribbonUi = null;
             _taskPaneFactory = null;
@@ -80,9 +76,8 @@ namespace ExcelReportBuilder.AddIn.Com
             TearDownTaskPane();
         }
 
-        public void CTPFactoryAvailable(object taskPaneFactory)
+        public void CTPFactoryAvailable(ICTPFactory taskPaneFactory)
         {
-            LateBoundCom.FinalRelease(_taskPaneFactory);
             _taskPaneFactory = taskPaneFactory;
 
             if (_showWhenFactoryIsReady)
@@ -117,6 +112,19 @@ namespace ExcelReportBuilder.AddIn.Com
             return _taskPaneFactory != null;
         }
 
+        public void OnOpenExcelFieldList(object control)
+        {
+            if (LateBoundCom.TryGetProperty(_application, "CommandBars", out object? commandBars))
+            {
+                LateBoundCom.TryInvoke(commandBars, "ExecuteMso", "PivotFieldListShowHide");
+            }
+        }
+
+        public bool GetPivotActionEnabled(object control)
+        {
+            return _application != null;
+        }
+
         [ComRegisterFunction]
         public static void Register(Type registeredType)
         {
@@ -127,8 +135,8 @@ namespace ExcelReportBuilder.AddIn.Com
                     throw new InvalidOperationException("Could not create the per-user Excel add-in registration key.");
                 }
 
-                key.SetValue("Description", "Build checked dense management reports from workbook data.");
-                key.SetValue("FriendlyName", "Excel Report Builder");
+                key.SetValue("Description", "Enhance a selected native Excel PivotTable.");
+                key.SetValue("FriendlyName", "PivotTable+");
                 key.SetValue("LoadBehavior", 3, RegistryValueKind.DWord);
             }
         }
@@ -168,9 +176,7 @@ namespace ExcelReportBuilder.AddIn.Com
 
             try
             {
-                _taskPane = LateBoundCom.Invoke(
-                    _taskPaneFactory,
-                    "CreateCTP",
+                _taskPane = _taskPaneFactory.CreateCTP(
                     TaskPaneHost.ProgramId,
                     TaskPaneTitle,
                     parentWindow);
@@ -184,13 +190,6 @@ namespace ExcelReportBuilder.AddIn.Com
             {
                 _taskPane = null;
                 _showWhenFactoryIsReady = false;
-            }
-            finally
-            {
-                if (!ReferenceEquals(parentWindow, Type.Missing))
-                {
-                    LateBoundCom.FinalRelease(parentWindow);
-                }
             }
         }
 

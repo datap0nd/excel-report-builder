@@ -784,7 +784,7 @@ function Assert-InstalledPerUserRegistration {
     )
 
     $appName = "Excel Report Builder"
-    $assemblyVersion = "0.1.0.0"
+    $assemblyVersion = "0.2.0.0"
     $assemblyName = (
         "ExcelReportBuilder.AddIn, Version=$assemblyVersion, " +
         "Culture=neutral, PublicKeyToken=null")
@@ -822,12 +822,12 @@ function Assert-InstalledPerUserRegistration {
             foreach ($addinValue in @(
                 [pscustomobject]@{
                     Name = "FriendlyName"
-                    Value = $appName
+                    Value = "PivotTable+"
                     Kind = $stringKind
                 },
                 [pscustomobject]@{
                     Name = "Description"
-                    Value = "Build validated dense management reports from one workbook source."
+                    Value = "Enhance a selected native Excel PivotTable."
                     Kind = $stringKind
                 },
                 [pscustomobject]@{

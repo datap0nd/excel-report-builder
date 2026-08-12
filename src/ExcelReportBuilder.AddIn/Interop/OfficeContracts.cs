@@ -14,22 +14,37 @@ namespace ExcelReportBuilder.AddIn.Interop
     {
         [DispId(1)]
         void OnConnection(
-            [MarshalAs(UnmanagedType.IDispatch)] object application,
-            ExtConnectMode connectMode,
-            [MarshalAs(UnmanagedType.IDispatch)] object addInInstance,
-            ref Array custom);
+            [In, MarshalAs(UnmanagedType.IDispatch)] object application,
+            [In] ExtConnectMode connectMode,
+            [In, MarshalAs(UnmanagedType.IDispatch)] object addInInstance,
+            [In, MarshalAs(
+                UnmanagedType.SafeArray,
+                SafeArraySubType = VarEnum.VT_VARIANT)] ref Array custom);
 
         [DispId(2)]
-        void OnDisconnection(ExtDisconnectMode removeMode, ref Array custom);
+        void OnDisconnection(
+            [In] ExtDisconnectMode removeMode,
+            [In, MarshalAs(
+                UnmanagedType.SafeArray,
+                SafeArraySubType = VarEnum.VT_VARIANT)] ref Array custom);
 
         [DispId(3)]
-        void OnAddInsUpdate(ref Array custom);
+        void OnAddInsUpdate(
+            [In, MarshalAs(
+                UnmanagedType.SafeArray,
+                SafeArraySubType = VarEnum.VT_VARIANT)] ref Array custom);
 
         [DispId(4)]
-        void OnStartupComplete(ref Array custom);
+        void OnStartupComplete(
+            [In, MarshalAs(
+                UnmanagedType.SafeArray,
+                SafeArraySubType = VarEnum.VT_VARIANT)] ref Array custom);
 
         [DispId(5)]
-        void OnBeginShutdown(ref Array custom);
+        void OnBeginShutdown(
+            [In, MarshalAs(
+                UnmanagedType.SafeArray,
+                SafeArraySubType = VarEnum.VT_VARIANT)] ref Array custom);
     }
 
     public enum ExtConnectMode
@@ -38,16 +53,16 @@ namespace ExcelReportBuilder.AddIn.Interop
         Startup = 1,
         External = 2,
         CommandLine = 3,
-        Solution = 4
+        Solution = 4,
+        UISetup = 5
     }
 
     public enum ExtDisconnectMode
     {
         HostShutdown = 0,
         UserClosed = 1,
-        SetupChanged = 2,
-        SolutionClosed = 3,
-        Unloaded = 4
+        UISetupComplete = 2,
+        SolutionClosed = 3
     }
 
     /// <summary>
@@ -60,19 +75,37 @@ namespace ExcelReportBuilder.AddIn.Interop
     {
         [DispId(1)]
         [return: MarshalAs(UnmanagedType.BStr)]
-        string GetCustomUI([MarshalAs(UnmanagedType.BStr)] string ribbonId);
+        string GetCustomUI([In, MarshalAs(UnmanagedType.BStr)] string ribbonId);
+    }
+
+    /// <summary>
+    /// Office custom task-pane factory supplied to the add-in at startup.
+    /// </summary>
+    [ComImport]
+    [Guid("000C033D-0000-0000-C000-000000000046")]
+    [InterfaceType(ComInterfaceType.InterfaceIsDual)]
+    public interface ICTPFactory
+    {
+        [DispId(1)]
+        [return: MarshalAs(UnmanagedType.Interface)]
+        object CreateCTP(
+            [In, MarshalAs(UnmanagedType.BStr)] string controlProgramId,
+            [In, MarshalAs(UnmanagedType.BStr)] string title,
+            [In, Optional, MarshalAs(UnmanagedType.Struct)] object parentWindow);
     }
 
     /// <summary>
     /// Office calls this interface after it has created the custom task-pane factory.
-    /// The factory stays late bound so the add-in has no Office assembly reference.
+    /// The local COM contract avoids a deployment dependency on the Office PIA.
     /// </summary>
     [ComImport]
     [Guid("000C033E-0000-0000-C000-000000000046")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [InterfaceType(ComInterfaceType.InterfaceIsDual)]
     public interface ICustomTaskPaneConsumer
     {
-        void CTPFactoryAvailable([In, MarshalAs(UnmanagedType.Interface)] object taskPaneFactory);
+        [DispId(1)]
+        void CTPFactoryAvailable(
+            [In, MarshalAs(UnmanagedType.Interface)] ICTPFactory taskPaneFactory);
     }
 
     [ComVisible(true)]
@@ -91,5 +124,11 @@ namespace ExcelReportBuilder.AddIn.Interop
 
         [DispId(4)]
         bool GetTaskPaneEnabled([MarshalAs(UnmanagedType.IDispatch)] object control);
+
+        [DispId(5)]
+        void OnOpenExcelFieldList([MarshalAs(UnmanagedType.IDispatch)] object control);
+
+        [DispId(6)]
+        bool GetPivotActionEnabled([MarshalAs(UnmanagedType.IDispatch)] object control);
     }
 }

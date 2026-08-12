@@ -21,9 +21,17 @@
 
 ## Product Boundaries
 
-- The model may propose only validated report-specification operations.
-- No arbitrary formulas, VBA, COM calls, shell commands, filesystem tools,
-  workbook saves, publishing, or deletion may be exposed to the model.
-- The add-in may modify only explicitly owned managed objects.
+- The model may propose only validated PivotTable+ operations.
+- No arbitrary DAX, MDX, worksheet formulas, VBA, COM calls, shell commands,
+  filesystem tools, workbook saves, publishing, or deletion may be exposed to
+  the model.
+- The add-in may change the explicitly selected PivotTable only after preview
+  and confirmation. It owns only the measures, named sets, queries,
+  connections, and metadata that it creates; it never claims ownership of a
+  user's PivotTable or source data.
+- Supported features must remain inside one real Excel PivotTable. Do not
+  silently substitute a formula-backed companion report.
 - Never truncate data silently or infer a missing reporting year.
+- Source period grain and member coverage must be validated before generating
+  a period calculation or asymmetric set.
 - Continuous, specific progress is required for every long-running operation.
