@@ -1,5 +1,13 @@
 # PivotTable+
 
+## Download
+
+**[Download PivotTable+ for Windows (.exe)](https://github.com/datap0nd/excel-report-builder/releases/download/v0.2.0/ExcelReportBuilderSetup-0.2.0-unsigned.exe)**
+
+This is an unsigned prototype for Excel LTSC 2021 and compatible Microsoft 365
+desktop Excel. Close Excel before running the installer; no PC restart is
+required.
+
 PivotTable+ is a Windows Excel add-in that enhances a real native PivotTable.
 Excel's PivotTable, Analyze/Design tabs, refresh behavior, and built-in Fields
 pane remain usable. The add-in supplies a compact companion pane for previewed
@@ -31,7 +39,7 @@ until the live-host release matrix is complete.
 
 ## Install
 
-Download the setup executable and matching SHA-256 file from
+Download the setup executable above and matching SHA-256 file from
 [GitHub Releases](https://github.com/datap0nd/excel-report-builder/releases),
 verify the checksum, close Excel, and run setup. Installation is per-user and
 does not require administrator rights. Windows may show an unknown-publisher

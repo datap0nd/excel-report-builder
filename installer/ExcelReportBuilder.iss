@@ -1,6 +1,6 @@
 #define AppName "Excel Report Builder"
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #define AppVersion "0.2.0"
 #endif
 #define AppPublisher "Excel Report Builder contributors"
 #define AppProgId "ExcelReportBuilder.AddIn"
@@ -9,8 +9,8 @@
 #define PaneClsid "{{A3F4E10D-0DD1-420E-8B6F-E0A654BBEA16}"
 #define ManagedCategory "{{62C8FE65-4EBB-45E7-B440-6E39B2CDBF29}"
 #define ControlCategory "{{40FC6ED4-2438-11CF-A3DB-080036F12502}"
-#define AssemblyVersion "0.1.0.0"
-#define AssemblyName "ExcelReportBuilder.AddIn, Version=0.1.0.0, Culture=neutral, PublicKeyToken=null"
+#define AssemblyVersion "0.2.0.0"
+#define AssemblyName "ExcelReportBuilder.AddIn, Version=0.2.0.0, Culture=neutral, PublicKeyToken=null"
 
 [Setup]
 AppId={{6A0B5710-1CD6-4F13-BE63-0E05B6860547}

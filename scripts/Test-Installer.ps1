@@ -784,7 +784,7 @@ function Assert-InstalledPerUserRegistration {
     )
 
     $appName = "Excel Report Builder"
-    $assemblyVersion = "0.1.0.0"
+    $assemblyVersion = "0.2.0.0"
     $assemblyName = (
         "ExcelReportBuilder.AddIn, Version=$assemblyVersion, " +
         "Culture=neutral, PublicKeyToken=null")
