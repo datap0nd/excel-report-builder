@@ -223,6 +223,414 @@ public sealed class PivotPlusPersistenceTests
     }
 
     [Fact]
+    public void Pending_semantic_apply_round_trips_hash_only_transitions_without_changing_active_truth()
+    {
+        var workbook = new FakeWorkbook();
+        PivotPlusWorkbookMetadata metadata = CreatePendingSemanticMetadata(
+            "setup_1",
+            "Sheet1",
+            "PivotTable1");
+        List<PivotPlusOwnedArtifact> priorTruth = metadata.Artifacts
+            .Select(Copy)
+            .ToList();
+        var store = new PivotPlusWorkbookMetadataStore();
+
+        store.Save(workbook, metadata);
+
+        PivotPlusWorkbookMetadata loaded = Assert.Single(store.LoadAll(workbook));
+        Assert.Equal("1.4", loaded.SchemaVersion);
+        Assert.Equal(
+            priorTruth.Select(ArtifactIdentity),
+            loaded.Artifacts.Select(ArtifactIdentity));
+        PivotPlusPendingSemanticApplyMetadata pending = Assert.IsType<
+            PivotPlusPendingSemanticApplyMetadata>(loaded.PendingSemanticApply);
+        Assert.Equal("semantic_apply_1", pending.ApplyId);
+        Assert.Equal(
+            Fingerprint("pivotplus.semantic-plan.v1", "plan setup_1"),
+            pending.PlanFingerprint);
+        Assert.Equal(3, pending.Transitions.Count);
+
+        PivotPlusSemanticArtifactTransition create = pending.Transitions.Single(item =>
+            item.Operation == PivotPlusSemanticArtifactOperation.Create);
+        Assert.Equal(PivotPlusArtifactKind.Measure, create.Kind);
+        Assert.Equal(string.Empty, create.BeforeLiveFingerprint);
+        Assert.DoesNotContain(
+            loaded.Artifacts,
+            item => item.Kind == create.Kind &&
+                    string.Equals(item.ArtifactId, create.ArtifactId, StringComparison.Ordinal));
+
+        foreach (PivotPlusSemanticArtifactTransition transition in
+                 pending.Transitions.Where(item =>
+                     item.Operation != PivotPlusSemanticArtifactOperation.Create))
+        {
+            Assert.Contains(
+                loaded.Artifacts,
+                item => item.Kind == transition.Kind &&
+                        string.Equals(
+                            item.ArtifactId,
+                            transition.ArtifactId,
+                            StringComparison.Ordinal) &&
+                        string.Equals(
+                            item.Fingerprint,
+                            transition.BeforeLiveFingerprint,
+                            StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public void Pending_semantic_apply_serialization_is_deterministic_and_definition_free()
+    {
+        const string generatedDefinition = "CALCULATE([Synthetic Amount])";
+        PivotPlusWorkbookMetadata first = CreatePendingSemanticMetadata(
+            "setup_1",
+            "Sheet1",
+            "PivotTable1");
+        first.PendingSemanticApply!.Transitions = first.PendingSemanticApply.Transitions
+            .Reverse()
+            .ToList();
+        first.PendingSemanticApply.Transitions[0].PlannedDefinitionFingerprint =
+            Fingerprint("pivotplus.semantic-definition.v1", generatedDefinition);
+        PivotPlusWorkbookMetadata second = CreatePendingSemanticMetadata(
+            "setup_1",
+            "Sheet1",
+            "PivotTable1");
+        second.PendingSemanticApply!.Transitions.Single(item =>
+                item.ArtifactId == first.PendingSemanticApply.Transitions[0].ArtifactId)
+            .PlannedDefinitionFingerprint =
+            first.PendingSemanticApply.Transitions[0].PlannedDefinitionFingerprint;
+        var store = new PivotPlusWorkbookMetadataStore();
+
+        string firstXml = store.Serialize(first);
+        string secondXml = store.Serialize(second);
+
+        Assert.Equal(secondXml, firstXml);
+        Assert.DoesNotContain(generatedDefinition, firstXml, StringComparison.Ordinal);
+        Assert.DoesNotContain("formula", firstXml, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("member", firstXml, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("workbookPath", firstXml, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("cellValue", firstXml, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Pending_semantic_apply_enforces_operation_specific_before_live_fingerprints()
+    {
+        var store = new PivotPlusWorkbookMetadataStore();
+
+        PivotPlusWorkbookMetadata createWithPriorHash = CreatePendingSemanticMetadata(
+            "setup_create",
+            "Sheet1",
+            "PivotTable1");
+        createWithPriorHash.PendingSemanticApply!.Transitions.Single(item =>
+                item.Operation == PivotPlusSemanticArtifactOperation.Create)
+            .BeforeLiveFingerprint = Fingerprint(
+                "pivotplus.live-definition.v1",
+                "must be absent");
+        Assert.Throws<ArgumentException>(() => store.Serialize(createWithPriorHash));
+
+        foreach (PivotPlusSemanticArtifactOperation operation in new[]
+                 {
+                     PivotPlusSemanticArtifactOperation.Update,
+                     PivotPlusSemanticArtifactOperation.Delete
+                 })
+        {
+            PivotPlusWorkbookMetadata missing = CreatePendingSemanticMetadata(
+                "setup_" + operation.ToString().ToLowerInvariant(),
+                "Sheet1",
+                "PivotTable1");
+            missing.PendingSemanticApply!.Transitions.Single(item =>
+                    item.Operation == operation)
+                .BeforeLiveFingerprint = string.Empty;
+            Assert.Throws<ArgumentException>(() => store.Serialize(missing));
+        }
+    }
+
+    [Fact]
+    public void Pending_semantic_apply_keeps_active_artifacts_as_exact_prior_truth()
+    {
+        var store = new PivotPlusWorkbookMetadataStore();
+
+        PivotPlusWorkbookMetadata createOverOwned = CreatePendingSemanticMetadata(
+            "setup_create",
+            "Sheet1",
+            "PivotTable1");
+        PivotPlusOwnedArtifact ownedMeasure = createOverOwned.Artifacts.Single(item =>
+            item.Kind == PivotPlusArtifactKind.Measure);
+        PivotPlusSemanticArtifactTransition create = createOverOwned.PendingSemanticApply!
+            .Transitions.Single(item =>
+                item.Operation == PivotPlusSemanticArtifactOperation.Create);
+        create.ArtifactId = ownedMeasure.ArtifactId;
+        Assert.Throws<InvalidOperationException>(() => store.Serialize(createOverOwned));
+
+        PivotPlusWorkbookMetadata updateDrift = CreatePendingSemanticMetadata(
+            "setup_update",
+            "Sheet1",
+            "PivotTable1");
+        updateDrift.PendingSemanticApply!.Transitions.Single(item =>
+                item.Operation == PivotPlusSemanticArtifactOperation.Update)
+            .BeforeLiveFingerprint = Fingerprint(
+                "pivotplus.live-definition.v1",
+                "drifted definition");
+        Assert.Throws<InvalidOperationException>(() => store.Serialize(updateDrift));
+
+        PivotPlusWorkbookMetadata deleteMissing = CreatePendingSemanticMetadata(
+            "setup_delete",
+            "Sheet1",
+            "PivotTable1");
+        PivotPlusSemanticArtifactTransition delete = deleteMissing.PendingSemanticApply!
+            .Transitions.Single(item =>
+                item.Operation == PivotPlusSemanticArtifactOperation.Delete);
+        deleteMissing.Artifacts.Remove(deleteMissing.Artifacts.Single(item =>
+            item.Kind == delete.Kind && item.ArtifactId == delete.ArtifactId));
+        Assert.Throws<InvalidOperationException>(() => store.Serialize(deleteMissing));
+    }
+
+    [Fact]
+    public void Pending_semantic_apply_allows_placement_only_and_is_bounded_unique_and_typed()
+    {
+        var store = new PivotPlusWorkbookMetadataStore();
+
+        PivotPlusWorkbookMetadata empty = CreatePendingSemanticMetadata(
+            "setup_empty",
+            "Sheet1",
+            "PivotTable1");
+        empty.PendingSemanticApply!.Transitions.Clear();
+        string placementOnlyXml = store.Serialize(empty);
+        var placementOnlyWorkbook = new FakeWorkbook();
+        placementOnlyWorkbook.CustomXMLParts.Add(placementOnlyXml);
+        Assert.Empty(Assert.Single(store.LoadAll(placementOnlyWorkbook))
+            .PendingSemanticApply!.Transitions);
+
+        PivotPlusWorkbookMetadata tooMany = CreateMetadata(
+            "setup_many",
+            "Sheet1",
+            "PivotTable1");
+        tooMany.PendingSemanticApply = CreatePendingCreateApply(
+            Enumerable.Range(0, 129)
+                .Select(index => "measure_new_" + index)
+                .ToArray());
+        Assert.Throws<ArgumentException>(() => store.Serialize(tooMany));
+
+        PivotPlusWorkbookMetadata duplicate = CreateMetadata(
+            "setup_duplicate",
+            "Sheet1",
+            "PivotTable1");
+        duplicate.PendingSemanticApply = CreatePendingCreateApply(
+            "measure_new",
+            "MEASURE_NEW");
+        Assert.Throws<InvalidOperationException>(() => store.Serialize(duplicate));
+
+        PivotPlusWorkbookMetadata invalidKind = CreateMetadata(
+            "setup_kind",
+            "Sheet1",
+            "PivotTable1");
+        invalidKind.PendingSemanticApply = CreatePendingCreateApply("query_new");
+        invalidKind.PendingSemanticApply.Transitions[0].Kind = PivotPlusArtifactKind.Query;
+        Assert.Throws<ArgumentException>(() => store.Serialize(invalidKind));
+    }
+
+    [Fact]
+    public void Pending_semantic_apply_is_mutually_exclusive_with_conversion_recovery()
+    {
+        PivotPlusWorkbookMetadata metadata = CreatePendingMetadata(
+            "setup_1",
+            "Sheet1",
+            "PivotTable1",
+            PivotPlusRecoveryPhase.Planned);
+        metadata.PendingSemanticApply = CreatePendingCreateApply("measure_new");
+
+        ArgumentException exception = Assert.Throws<ArgumentException>(() =>
+            new PivotPlusWorkbookMetadataStore().Serialize(metadata));
+
+        Assert.Contains("mutually exclusive", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Pending_semantic_transition_ids_reserve_cross_setup_ownership()
+    {
+        var workbook = new FakeWorkbook();
+        var store = new PivotPlusWorkbookMetadataStore();
+        PivotPlusWorkbookMetadata first = CreateMetadata(
+            "setup_1",
+            "Sheet1",
+            "PivotTable1");
+        first.PendingSemanticApply = CreatePendingCreateApply("measure_reserved");
+        store.Save(workbook, first);
+        string original = Assert.Single(workbook.CustomXMLParts.AllXml);
+
+        PivotPlusWorkbookMetadata collision = CreateMetadata(
+            "setup_2",
+            "Sheet2",
+            "PivotTable2");
+        collision.PendingSemanticApply = CreatePendingCreateApply("MEASURE_RESERVED");
+
+        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
+            store.Save(workbook, collision));
+        Assert.Contains("same generated artifact", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(original, Assert.Single(workbook.CustomXMLParts.AllXml));
+    }
+
+    [Fact]
+    public void Save_rejects_pending_semantic_apply_that_rewrites_prior_active_truth()
+    {
+        var workbook = new FakeWorkbook();
+        var store = new PivotPlusWorkbookMetadataStore();
+        PivotPlusWorkbookMetadata prior = CreateMetadata(
+            "setup_1",
+            "Sheet1",
+            "PivotTable1");
+        store.Save(workbook, prior);
+        string original = Assert.Single(workbook.CustomXMLParts.AllXml);
+
+        PivotPlusWorkbookMetadata replacement = CreateMetadata(
+            "setup_1",
+            "Sheet1",
+            "PivotTable1");
+        PivotPlusOwnedArtifact omittedMeasure = replacement.Artifacts.Single(item =>
+            item.Kind == PivotPlusArtifactKind.Measure);
+        replacement.Artifacts.Remove(omittedMeasure);
+        replacement.PendingSemanticApply = CreatePendingCreateApply(
+            omittedMeasure.ArtifactId);
+
+        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
+            store.Save(workbook, replacement));
+        Assert.Contains("prior active owned-artifact truth", exception.Message);
+        Assert.Equal(original, Assert.Single(workbook.CustomXMLParts.AllXml));
+    }
+
+    [Fact]
+    public void Pending_semantic_apply_replacement_accepts_add_and_delete_after_commit_failures()
+    {
+        var store = new PivotPlusWorkbookMetadataStore();
+
+        var addAfterCommit = new FaultingWorkbook();
+        addAfterCommit.CustomXMLParts.Seed(store.Serialize(
+            CreateMetadata("setup_add", "Sheet1", "PivotTable1")));
+        addAfterCommit.CustomXMLParts.InsertThenThrow = true;
+        PivotPlusWorkbookMetadata addReplacement = CreateMetadata(
+            "setup_add",
+            "Sheet1",
+            "PivotTable1");
+        addReplacement.PendingSemanticApply = CreatePendingCreateApply("measure_new");
+        store.Save(addAfterCommit, addReplacement);
+        Assert.NotNull(store.Load(addAfterCommit, "setup_add")!.PendingSemanticApply);
+        Assert.Single(addAfterCommit.CustomXMLParts.AllXml);
+
+        var deleteAfterCommit = new FaultingWorkbook();
+        deleteAfterCommit.CustomXMLParts.Seed(
+            store.Serialize(CreateMetadata("setup_delete", "Sheet1", "PivotTable1")),
+            throwOnDelete: true,
+            removeBeforeThrow: true);
+        PivotPlusWorkbookMetadata deleteReplacement = CreateMetadata(
+            "setup_delete",
+            "Sheet1",
+            "PivotTable1");
+        deleteReplacement.PendingSemanticApply = CreatePendingCreateApply("measure_new");
+        store.Save(deleteAfterCommit, deleteReplacement);
+        Assert.NotNull(store.Load(deleteAfterCommit, "setup_delete")!.PendingSemanticApply);
+        Assert.Single(deleteAfterCommit.CustomXMLParts.AllXml);
+    }
+
+    [Fact]
+    public void Pending_semantic_apply_parser_rejects_unknown_and_operation_incompatible_fields()
+    {
+        var store = new PivotPlusWorkbookMetadataStore();
+        XNamespace ns = PivotPlusWorkbookMetadataStore.NamespaceUri;
+        XDocument unknownAttribute = XDocument.Parse(store.Serialize(
+            CreatePendingSemanticMetadata("setup_1", "Sheet1", "PivotTable1")));
+        unknownAttribute.Root!.Element(ns + "pendingSemanticApply")!
+            .SetAttributeValue("definition", "not allowed");
+        var unknownWorkbook = new FakeWorkbook();
+        unknownWorkbook.CustomXMLParts.Add(
+            unknownAttribute.ToString(SaveOptions.DisableFormatting));
+        InvalidOperationException unknownException = Assert.Throws<InvalidOperationException>(() =>
+            store.LoadAll(unknownWorkbook));
+        Assert.Contains(
+            "unknown attribute",
+            unknownException.InnerException!.Message,
+            StringComparison.Ordinal);
+
+        XDocument createWithBefore = XDocument.Parse(store.Serialize(
+            CreatePendingSemanticMetadata("setup_2", "Sheet1", "PivotTable1")));
+        XElement createTransition = createWithBefore.Root!
+            .Element(ns + "pendingSemanticApply")!
+            .Element(ns + "transitions")!
+            .Elements(ns + "transition")
+            .Single(element => (string?)element.Attribute("operation") == "create");
+        createTransition.SetAttributeValue(
+            "beforeLiveFingerprint",
+            Fingerprint("pivotplus.live-definition.v1", "smuggled"));
+        var incompatibleWorkbook = new FakeWorkbook();
+        incompatibleWorkbook.CustomXMLParts.Add(
+            createWithBefore.ToString(SaveOptions.DisableFormatting));
+        InvalidOperationException incompatibleException =
+            Assert.Throws<InvalidOperationException>(() =>
+                store.LoadAll(incompatibleWorkbook));
+        Assert.Contains(
+            "unknown attribute",
+            incompatibleException.InnerException!.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(PivotPlusWorkbookMetadata.Version1_0)]
+    [InlineData(PivotPlusWorkbookMetadata.Version1_1)]
+    [InlineData(PivotPlusWorkbookMetadata.Version1_2)]
+    [InlineData(PivotPlusWorkbookMetadata.Version1_3)]
+    public void Legacy_versions_reject_pending_semantic_apply(string version)
+    {
+        var store = new PivotPlusWorkbookMetadataStore();
+        XDocument document = XDocument.Parse(store.Serialize(
+            CreatePendingSemanticMetadata("setup_legacy", "Sheet1", "PivotTable1")));
+        XNamespace ns = PivotPlusWorkbookMetadataStore.NamespaceUri;
+        document.Root!.SetAttributeValue("schemaVersion", version);
+        if (version == PivotPlusWorkbookMetadata.Version1_0)
+        {
+            document.Root.Element(ns + "artifacts")!
+                .Elements(ns + "artifact")
+                .Single(element =>
+                    (string?)element.Attribute("kind") == "workbookName")
+                .Remove();
+        }
+
+        var workbook = new FakeWorkbook();
+        workbook.CustomXMLParts.Add(document.ToString(SaveOptions.DisableFormatting));
+
+        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
+            store.LoadAll(workbook));
+        Assert.Contains(
+            "not valid before metadata version 1.4",
+            exception.InnerException!.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Version_1_3_recovery_round_trips_and_migrates_to_1_4()
+    {
+        var workbook = new FakeWorkbook();
+        var store = new PivotPlusWorkbookMetadataStore();
+        XDocument document = XDocument.Parse(store.Serialize(CreatePendingMetadata(
+            "setup_legacy",
+            "Sheet1",
+            "PivotTable1",
+            PivotPlusRecoveryPhase.StagingVerified)));
+        document.Root!.SetAttributeValue(
+            "schemaVersion",
+            PivotPlusWorkbookMetadata.Version1_3);
+        workbook.CustomXMLParts.Add(document.ToString(SaveOptions.DisableFormatting));
+
+        PivotPlusWorkbookMetadata legacy = Assert.Single(store.LoadAll(workbook));
+        Assert.Equal(PivotPlusWorkbookMetadata.Version1_3, legacy.SchemaVersion);
+        Assert.Equal(PivotPlusRecoveryPhase.StagingVerified, legacy.RecoveryPhase);
+
+        store.Save(workbook, legacy);
+
+        PivotPlusWorkbookMetadata migrated = Assert.Single(store.LoadAll(workbook));
+        Assert.Equal(PivotPlusWorkbookMetadata.CurrentSchemaVersion, migrated.SchemaVersion);
+        Assert.Equal(PivotPlusRecoveryPhase.StagingVerified, migrated.RecoveryPhase);
+        Assert.Null(migrated.PendingSemanticApply);
+    }
+
+    [Fact]
     public void Serialization_is_deterministic_for_equivalent_input_orders()
     {
         var first = CreateMetadata("setup_1", "Sheet1", "PivotTable1");
@@ -581,7 +989,7 @@ public sealed class PivotPlusPersistenceTests
     }
 
     [Fact]
-    public void Store_reads_version_1_1_and_migrates_it_to_current_1_3()
+    public void Store_reads_version_1_1_and_migrates_it_to_current_1_4()
     {
         var workbook = new FakeWorkbook();
         var store = new PivotPlusWorkbookMetadataStore();
@@ -850,7 +1258,7 @@ public sealed class PivotPlusPersistenceTests
     }
 
     [Fact]
-    public void Version_1_2_reads_temporary_worksheet_receipts_without_recovery_and_migrates_to_1_3()
+    public void Version_1_2_reads_temporary_worksheet_receipts_without_recovery_and_migrates_to_1_4()
     {
         var workbook = new FakeWorkbook();
         var store = new PivotPlusWorkbookMetadataStore();
@@ -903,6 +1311,7 @@ public sealed class PivotPlusPersistenceTests
     [InlineData(PivotPlusWorkbookMetadata.Version1_0)]
     [InlineData(PivotPlusWorkbookMetadata.Version1_1)]
     [InlineData(PivotPlusWorkbookMetadata.Version1_2)]
+    [InlineData(PivotPlusWorkbookMetadata.Version1_3)]
     public void Save_migrates_a_loaded_active_legacy_record_to_current_schema(string version)
     {
         var workbook = new FakeWorkbook();
@@ -1156,6 +1565,99 @@ public sealed class PivotPlusPersistenceTests
                 Artifact(PivotPlusArtifactKind.WorkbookName, "source_name_" + setupId, "workbook-name")
             }
         };
+    }
+
+    private static PivotPlusWorkbookMetadata CreatePendingSemanticMetadata(
+        string setupId,
+        string worksheet,
+        string pivotTable)
+    {
+        PivotPlusWorkbookMetadata metadata = CreateMetadata(
+            setupId,
+            worksheet,
+            pivotTable);
+        PivotPlusOwnedArtifact measure = metadata.Artifacts.Single(item =>
+            item.Kind == PivotPlusArtifactKind.Measure);
+        PivotPlusOwnedArtifact namedSet = metadata.Artifacts.Single(item =>
+            item.Kind == PivotPlusArtifactKind.NamedSet);
+        metadata.PendingSemanticApply = new PivotPlusPendingSemanticApplyMetadata
+        {
+            ApplyId = "semantic_apply_1",
+            PlanFingerprint = Fingerprint(
+                "pivotplus.semantic-plan.v1",
+                "plan " + setupId),
+            BeforePivotFingerprint = Fingerprint(
+                "pivotplus.pivot-state.v1",
+                "before " + setupId),
+            ExpectedPivotFingerprint = Fingerprint(
+                "pivotplus.pivot-state.v1",
+                "expected " + setupId),
+            Transitions = new List<PivotPlusSemanticArtifactTransition>
+            {
+                new()
+                {
+                    Kind = PivotPlusArtifactKind.Measure,
+                    ArtifactId = "measure_variance_" + setupId,
+                    Operation = PivotPlusSemanticArtifactOperation.Create,
+                    PlannedDefinitionFingerprint = Fingerprint(
+                        "pivotplus.semantic-definition.v1",
+                        "create " + setupId)
+                },
+                new()
+                {
+                    Kind = measure.Kind,
+                    ArtifactId = measure.ArtifactId,
+                    Operation = PivotPlusSemanticArtifactOperation.Update,
+                    BeforeLiveFingerprint = measure.Fingerprint,
+                    PlannedDefinitionFingerprint = Fingerprint(
+                        "pivotplus.semantic-definition.v1",
+                        "update " + setupId)
+                },
+                new()
+                {
+                    Kind = namedSet.Kind,
+                    ArtifactId = namedSet.ArtifactId,
+                    Operation = PivotPlusSemanticArtifactOperation.Delete,
+                    BeforeLiveFingerprint = namedSet.Fingerprint,
+                    PlannedDefinitionFingerprint = Fingerprint(
+                        "pivotplus.semantic-definition.v1",
+                        "delete " + setupId)
+                }
+            }
+        };
+        return metadata;
+    }
+
+    private static PivotPlusPendingSemanticApplyMetadata CreatePendingCreateApply(
+        params string[] artifactIds)
+    {
+        return new PivotPlusPendingSemanticApplyMetadata
+        {
+            ApplyId = "semantic_apply_1",
+            PlanFingerprint = Fingerprint("pivotplus.semantic-plan.v1", "create plan"),
+            BeforePivotFingerprint = Fingerprint(
+                "pivotplus.pivot-state.v1",
+                "before create"),
+            ExpectedPivotFingerprint = Fingerprint(
+                "pivotplus.pivot-state.v1",
+                "expected create"),
+            Transitions = artifactIds
+                .Select(artifactId => new PivotPlusSemanticArtifactTransition
+                {
+                    Kind = PivotPlusArtifactKind.Measure,
+                    ArtifactId = artifactId,
+                    Operation = PivotPlusSemanticArtifactOperation.Create,
+                    PlannedDefinitionFingerprint = Fingerprint(
+                        "pivotplus.semantic-definition.v1",
+                        "create " + artifactId)
+                })
+                .ToList()
+        };
+    }
+
+    private static string ArtifactIdentity(PivotPlusOwnedArtifact artifact)
+    {
+        return artifact.Kind + "\u001f" + artifact.ArtifactId + "\u001f" + artifact.Fingerprint;
     }
 
     private static PivotPlusWorkbookMetadata CreatePendingMetadata(

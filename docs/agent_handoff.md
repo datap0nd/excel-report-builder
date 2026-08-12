@@ -2,19 +2,18 @@
 
 ## Current Objective
 
-Tasks 1-9 are complete on `codex/pivottable-plus`. Task 9 establishes the safe,
-native PivotTable+ foundation: read-only discovery, validated layout mutation,
-explicit classic-to-Data-Model conversion, durable recovery, and exact ownership
-of generated workbook artifacts.
+Tasks 1-10 are complete on `codex/pivottable-plus`. Task 10 adds typed DAX
+measure compilation, typed MDX named-set compilation, exact host mutation, one
+combined semantic transaction, and complete Rows/Columns/Values placement in
+one real Data Model PivotTable.
 
-The next numbered task is Task 10: implement typed, deterministic DAX measures
-and ordered MDX named sets for ratios, comparisons, period selections,
-asymmetric branches, and custom row or column order inside one real PivotTable.
+The next numbered task is Task 11: replace the old workbench with the compact,
+keyboard-accessible PivotTable+ task pane and contextual Ribbon actions.
 
 ## Repository State
 
 - Branch: `codex/pivottable-plus`
-- Tasks 1-9 in `plan.md` are complete; Tasks 10-14 remain.
+- Tasks 1-10 in `plan.md` are complete; Tasks 11-14 remain.
 - Task 9 was implemented and verified without controlling the Excel UI or using
   computer automation. All repository evidence uses generated synthetic data
   and generic names.
@@ -112,8 +111,8 @@ asymmetric branches, and custom row or column order inside one real PivotTable.
 
 - Release builds complete with zero warnings and zero errors for both Excel
   target frameworks: .NET Framework 4.8 and .NET Standard 2.0.
-- The final automated suite has 786 passing tests: 170 Core, 98 Agent, and 518
-  Excel tests.
+- The final automated suite has 1,025 passing tests: 244 Core, 98 Agent, and
+  683 Excel tests.
 - Coverage includes validation, read-only discovery, session identity,
   classic and OLAP layout planning, fail-closed COM capture, exact verification
   and rollback, schema 1.3 ownership, raw-range binding, interrupted conversion
@@ -121,6 +120,62 @@ asymmetric branches, and custom row or column order inside one real PivotTable.
 - The repository public-safety check passes against tracked and nonignored
   files. Task 9 fixtures and documentation contain only generated synthetic or
   generic content.
+
+## Task 10 Semantic PivotTable Contract
+
+### Typed calculations and periods
+
+- Closed, immutable calculation contracts compile only trusted schema field
+  IDs into deterministic DAX. Supported operations include aggregate,
+  weighted aggregate, difference, safe ratio, parent and filtered-total share,
+  growth, achievement, variance, variance percent, and percentage-point delta.
+- Period and scenario slices explicitly replace or intersect current axis
+  context. Coverage validation blocks impossible output such as manufacturing
+  quarters from yearly-only source data.
+- Dependencies form a bounded acyclic graph. Measures carry deterministic
+  definition and formula fingerprints, typed formatting, stable generated host
+  names, and exact creation and display order. No public raw-DAX node exists.
+- Exact typed equality uses strict set membership semantics, preventing DAX
+  blank coercion from treating blank as zero, false, or empty text.
+
+### Asymmetric named sets
+
+- A bounded schema catalog binds opaque hierarchy, level, and member IDs to
+  provider unique names. The model cannot supply or execute arbitrary MDX.
+- Closed named-set expressions support exact ordered tuples, hierarchy default
+  members, scoped/asymmetric branches, and typed Top N against an exact owned
+  DAX measure. They compile deterministically to set MDX and remain source- and
+  measure-fingerprint bound.
+- Excel mutation uses the supported CalculatedMembers.Add(xlCalculatedSet),
+  CubeFields.AddSet, MakeConnection, IsValid, and CubeField placement path.
+  Partial host commits, orphaned calculated-member/cube-field pairs, source
+  drift, sibling use, dynamic references, and inventory drift fail closed or
+  reconcile to an exact state.
+- A labeled Others member is deliberately unsupported: a named set can select
+  existing tuples but cannot create the complement as a new dimension member.
+
+### Combined one-PivotTable transaction
+
+- `PivotSemanticMutationService` composes measure upserts, named-set upserts,
+  the complete Rows/Columns/Values layout, named-set deletes, and measure
+  deletes under one write-ahead journal and exactly one selected-PivotTable
+  refresh.
+- The semantic layout preserves Filters exactly, handles the Excel Values
+  pseudo-field explicitly, interleaves generated and existing Values, and
+  never creates a helper worksheet or formula-backed companion table.
+- Verification rescans measures, calculated members, named sets, sibling
+  PivotTables, dependencies, filter state, and final layout before one combined
+  ownership commit. Failure rolls back in reverse dependency order and proves
+  the prior state before clearing the journal.
+- Same-session retries converge an ambiguous post-commit layout without a
+  duplicate host artifact. One-level Undo keeps formulas and prior native
+  definitions only in memory, journals the inverse transition, refreshes once,
+  and restores the exact prior layout and ownership. Post-restart semantic Undo
+  is intentionally unavailable because formulas are never persisted in
+  workbook metadata.
+- Ownership schema 1.4 stores only bounded IDs, operation kinds, target
+  references, and hashes for pending Measure and NamedSet transitions. Tests
+  assert that DAX and MDX never enter Custom XML.
 
 ## Remaining Boundary and Next Step
 
@@ -130,8 +185,12 @@ asymmetric branches, and custom row or column order inside one real PivotTable.
   Task 14. The main host risks are COM/RCW identity behavior, Values
   pseudo-field placement, PivotCache replacement, provider and Data Model
   differences, refresh timing, and rollback after real-host COM failures.
-- Task 10 is next. It must expose only typed, validated measure and named-set
-  operations; it must not expose arbitrary DAX, MDX, formulas, COM, filesystem,
-  save, publish, or deletion capabilities to the model.
-- Task 11 will add the PivotTable+ UI after the native and calculation layers
-  exist. Live-host and installer release evidence remains deferred to Task 14.
+- Task 11 now adds the familiar PivotTable+ pane over the completed native and
+  semantic layers. It must preserve the built-in Field List workflow and expose
+  only compact Extras, preview, Apply, and Undo controls.
+- Task 12 will map local-model requests to the same typed calculations, named
+  sets, and layout plan. It must not expose arbitrary DAX, MDX, formulas, COM,
+  filesystem, save, publish, or deletion capabilities to the model.
+- Live-host and installer release evidence remains deferred to Task 14. Task 10
+  used no Excel UI or computer control; all host evidence is generated,
+  late-bound, synthetic, and path-free.

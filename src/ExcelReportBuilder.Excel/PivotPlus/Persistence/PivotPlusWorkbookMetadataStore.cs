@@ -50,6 +50,21 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Persistence
             // Read and validate everything before replacing a part. This avoids
             // silently repairing ambiguous ownership or unknown schema versions.
             IReadOnlyList<PivotPlusWorkbookMetadata> existing = LoadAll((object)workbook);
+            PivotPlusWorkbookMetadata? priorForSetup = existing.SingleOrDefault(item =>
+                string.Equals(
+                    item.SetupId,
+                    metadata.SetupId,
+                    StringComparison.OrdinalIgnoreCase));
+            if (metadata.PendingSemanticApply != null &&
+                priorForSetup != null &&
+                !HaveExactArtifactTruth(
+                    priorForSetup.Artifacts,
+                    metadata.Artifacts))
+            {
+                throw new InvalidOperationException(
+                    "A pending semantic Apply must preserve prior active owned-artifact truth until commit.");
+            }
+
             var candidates = existing
                 .Where(item => !string.Equals(item.SetupId, metadata.SetupId, StringComparison.OrdinalIgnoreCase))
                 .Concat(new[] { metadata })
@@ -275,6 +290,13 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Persistence
                 root.Add(SerializeRecovery(ns, metadata));
             }
 
+            if (metadata.PendingSemanticApply != null)
+            {
+                root.Add(SerializePendingSemanticApply(
+                    ns,
+                    metadata.PendingSemanticApply));
+            }
+
             if (metadata.Undo != null)
             {
                 root.Add(SerializeUndo(ns, metadata.Undo));
@@ -306,6 +328,56 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Persistence
             }
 
             return recovery;
+        }
+
+        private static XElement SerializePendingSemanticApply(
+            XNamespace ns,
+            PivotPlusPendingSemanticApplyMetadata pending)
+        {
+            return new XElement(
+                ns + "pendingSemanticApply",
+                new XAttribute("applyId", pending.ApplyId),
+                new XAttribute("planFingerprint", pending.PlanFingerprint),
+                new XAttribute(
+                    "beforePivotFingerprint",
+                    pending.BeforePivotFingerprint),
+                new XAttribute(
+                    "expectedPivotFingerprint",
+                    pending.ExpectedPivotFingerprint),
+                new XElement(
+                    ns + "transitions",
+                    pending.Transitions
+                        .OrderBy(transition => transition.Kind)
+                        .ThenBy(
+                            transition => transition.ArtifactId,
+                            StringComparer.Ordinal)
+                        .ThenBy(transition => transition.Operation)
+                        .Select(transition =>
+                            SerializeSemanticTransition(ns, transition))));
+        }
+
+        private static XElement SerializeSemanticTransition(
+            XNamespace ns,
+            PivotPlusSemanticArtifactTransition transition)
+        {
+            var element = new XElement(
+                ns + "transition",
+                new XAttribute("kind", FormatKind(transition.Kind)),
+                new XAttribute("id", transition.ArtifactId),
+                new XAttribute(
+                    "operation",
+                    FormatSemanticArtifactOperation(transition.Operation)),
+                new XAttribute(
+                    "plannedDefinitionFingerprint",
+                    transition.PlannedDefinitionFingerprint));
+            if (transition.Operation != PivotPlusSemanticArtifactOperation.Create)
+            {
+                element.Add(new XAttribute(
+                    "beforeLiveFingerprint",
+                    transition.BeforeLiveFingerprint));
+            }
+
+            return element;
         }
 
         private static XElement SerializeUndo(XNamespace ns, PivotPlusUndoMetadata undo)
@@ -341,6 +413,23 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Persistence
                 .OrderBy(artifact => artifact.Kind)
                 .ThenBy(artifact => artifact.ArtifactId, StringComparer.Ordinal)
                 .ThenBy(artifact => artifact.Fingerprint, StringComparer.Ordinal);
+        }
+
+        private static bool HaveExactArtifactTruth(
+            IList<PivotPlusOwnedArtifact> left,
+            IList<PivotPlusOwnedArtifact> right)
+        {
+            return left.Count == right.Count && left.All(leftArtifact =>
+                right.Any(rightArtifact =>
+                    rightArtifact.Kind == leftArtifact.Kind &&
+                    string.Equals(
+                        rightArtifact.ArtifactId,
+                        leftArtifact.ArtifactId,
+                        StringComparison.Ordinal) &&
+                    string.Equals(
+                        rightArtifact.Fingerprint,
+                        leftArtifact.Fingerprint,
+                        StringComparison.Ordinal)));
         }
 
         private static bool SameNativePart(object left, object right)
@@ -396,6 +485,7 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Persistence
                     ns + "target",
                     ns + "artifacts",
                     ns + "recovery",
+                    ns + "pendingSemanticApply",
                     ns + "undo");
                 var version = RequiredAttribute(root, "schemaVersion");
                 if (!PivotPlusMetadataValidator.IsSupportedSchemaVersion(version))
@@ -431,16 +521,37 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Persistence
 
                 if (recoveryElements.Count == 1)
                 {
-                    if (!string.Equals(
-                            version,
-                            PivotPlusWorkbookMetadata.CurrentSchemaVersion,
-                            StringComparison.Ordinal))
+                    if (!SupportsRecovery(version))
                     {
                         throw new InvalidOperationException(
                             "Recovery checkpoints are not valid before metadata version 1.3.");
                     }
 
                     ReadRecovery(recoveryElements[0], metadata);
+                }
+
+                var pendingApplyElements = root.Elements(ns + "pendingSemanticApply").ToList();
+                if (pendingApplyElements.Count > 1)
+                {
+                    throw new InvalidOperationException(
+                        "PivotTable+ metadata can contain only one pending semantic Apply.");
+                }
+
+                if (pendingApplyElements.Count == 1)
+                {
+                    if (!string.Equals(
+                            version,
+                            PivotPlusWorkbookMetadata.CurrentSchemaVersion,
+                            StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException(
+                            "Pending semantic Apply metadata is not valid before metadata version 1.4.");
+                    }
+
+                    metadata.PendingSemanticApply = ReadPendingSemanticApply(
+                        pendingApplyElements[0],
+                        ns,
+                        version);
                 }
 
                 var undoElements = root.Elements(ns + "undo").ToList();
@@ -518,6 +629,81 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Persistence
             };
         }
 
+        private static PivotPlusPendingSemanticApplyMetadata ReadPendingSemanticApply(
+            XElement element,
+            XNamespace ns,
+            string schemaVersion)
+        {
+            EnsureAttributes(
+                element,
+                "applyId",
+                "planFingerprint",
+                "beforePivotFingerprint",
+                "expectedPivotFingerprint");
+            EnsureElementContent(element, ns + "transitions");
+
+            XElement transitions = RequiredSingleElement(element, ns + "transitions");
+            EnsureAttributes(transitions);
+            EnsureElementContent(transitions, ns + "transition");
+
+            return new PivotPlusPendingSemanticApplyMetadata
+            {
+                ApplyId = RequiredAttribute(element, "applyId"),
+                PlanFingerprint = RequiredAttribute(element, "planFingerprint"),
+                BeforePivotFingerprint = RequiredAttribute(
+                    element,
+                    "beforePivotFingerprint"),
+                ExpectedPivotFingerprint = RequiredAttribute(
+                    element,
+                    "expectedPivotFingerprint"),
+                Transitions = transitions.Elements(ns + "transition")
+                    .Select(item => ReadSemanticTransition(item, schemaVersion))
+                    .ToList()
+            };
+        }
+
+        private static PivotPlusSemanticArtifactTransition ReadSemanticTransition(
+            XElement element,
+            string schemaVersion)
+        {
+            PivotPlusSemanticArtifactOperation operation = ParseSemanticArtifactOperation(
+                RequiredAttribute(element, "operation"));
+            if (operation == PivotPlusSemanticArtifactOperation.Create)
+            {
+                EnsureAttributes(
+                    element,
+                    "kind",
+                    "id",
+                    "operation",
+                    "plannedDefinitionFingerprint");
+            }
+            else
+            {
+                EnsureAttributes(
+                    element,
+                    "kind",
+                    "id",
+                    "operation",
+                    "beforeLiveFingerprint",
+                    "plannedDefinitionFingerprint");
+            }
+
+            EnsureElementContent(element);
+            return new PivotPlusSemanticArtifactTransition
+            {
+                Kind = ParseKind(RequiredAttribute(element, "kind"), schemaVersion),
+                ArtifactId = RequiredAttribute(element, "id"),
+                Operation = operation,
+                BeforeLiveFingerprint =
+                    operation == PivotPlusSemanticArtifactOperation.Create
+                        ? string.Empty
+                        : RequiredAttribute(element, "beforeLiveFingerprint"),
+                PlannedDefinitionFingerprint = RequiredAttribute(
+                    element,
+                    "plannedDefinitionFingerprint")
+            };
+        }
+
         private static PivotPlusUndoMetadata ReadUndo(
             XElement element,
             XNamespace ns,
@@ -582,7 +768,8 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Persistence
         {
             var setupIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var artifacts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var artifactOwners = new Dictionary<string, string>(
+                StringComparer.OrdinalIgnoreCase);
 
             foreach (var item in metadata)
             {
@@ -600,16 +787,38 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Persistence
                         "Multiple PivotTable+ setups reference the same target PivotTable.");
                 }
 
+                var reservedBySetup = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var artifact in item.Artifacts)
                 {
-                    var artifactKey = PivotPlusMetadataValidator.ArtifactKey(
+                    reservedBySetup.Add(PivotPlusMetadataValidator.ArtifactKey(
                         artifact.Kind,
-                        artifact.ArtifactId);
-                    if (!artifacts.Add(artifactKey))
+                        artifact.ArtifactId));
+                }
+
+                if (item.PendingSemanticApply != null)
+                {
+                    foreach (PivotPlusSemanticArtifactTransition transition in
+                             item.PendingSemanticApply.Transitions)
+                    {
+                        reservedBySetup.Add(PivotPlusMetadataValidator.ArtifactKey(
+                            transition.Kind,
+                            transition.ArtifactId));
+                    }
+                }
+
+                foreach (string artifactKey in reservedBySetup)
+                {
+                    if (artifactOwners.TryGetValue(artifactKey, out string? ownerSetupId) &&
+                        !string.Equals(
+                            ownerSetupId,
+                            item.SetupId,
+                            StringComparison.OrdinalIgnoreCase))
                     {
                         throw new InvalidOperationException(
                             "Multiple PivotTable+ setups claim the same generated artifact.");
                     }
+
+                    artifactOwners[artifactKey] = item.SetupId;
                 }
             }
         }
@@ -676,10 +885,7 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Persistence
 
                     return PivotPlusArtifactKind.TemporaryWorksheet;
                 case "temporaryPivotTable":
-                    if (!string.Equals(
-                            schemaVersion,
-                            PivotPlusWorkbookMetadata.CurrentSchemaVersion,
-                            StringComparison.Ordinal))
+                    if (!SupportsRecovery(schemaVersion))
                     {
                         throw new InvalidOperationException(
                             "Temporary PivotTable ownership is not valid before metadata version 1.3.");
@@ -688,6 +894,51 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Persistence
                     return PivotPlusArtifactKind.TemporaryPivotTable;
                 default:
                     throw new InvalidOperationException("The artifact kind is invalid.");
+            }
+        }
+
+        private static bool SupportsRecovery(string schemaVersion)
+        {
+            return string.Equals(
+                       schemaVersion,
+                       PivotPlusWorkbookMetadata.Version1_3,
+                       StringComparison.Ordinal) ||
+                   string.Equals(
+                       schemaVersion,
+                       PivotPlusWorkbookMetadata.CurrentSchemaVersion,
+                       StringComparison.Ordinal);
+        }
+
+        private static string FormatSemanticArtifactOperation(
+            PivotPlusSemanticArtifactOperation operation)
+        {
+            switch (operation)
+            {
+                case PivotPlusSemanticArtifactOperation.Create:
+                    return "create";
+                case PivotPlusSemanticArtifactOperation.Update:
+                    return "update";
+                case PivotPlusSemanticArtifactOperation.Delete:
+                    return "delete";
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(operation));
+            }
+        }
+
+        private static PivotPlusSemanticArtifactOperation ParseSemanticArtifactOperation(
+            string value)
+        {
+            switch (value)
+            {
+                case "create":
+                    return PivotPlusSemanticArtifactOperation.Create;
+                case "update":
+                    return PivotPlusSemanticArtifactOperation.Update;
+                case "delete":
+                    return PivotPlusSemanticArtifactOperation.Delete;
+                default:
+                    throw new InvalidOperationException(
+                        "The semantic artifact operation is invalid.");
             }
         }
 

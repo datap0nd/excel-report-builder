@@ -42,6 +42,13 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Persistence
         StagingVerified
     }
 
+    public enum PivotPlusSemanticArtifactOperation
+    {
+        Create,
+        Update,
+        Delete
+    }
+
     public enum PivotPlusFieldArea
     {
         Filter,
@@ -61,6 +68,48 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Persistence
         /// deliberately not persisted in the ownership record.
         /// </summary>
         public string Fingerprint { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// One hash-only artifact transition in a semantic Apply journal. The
+    /// generated definition is deliberately absent; only its fingerprint is
+    /// persisted. Active ownership remains in <see cref="PivotPlusWorkbookMetadata.Artifacts" />
+    /// until the Apply commits.
+    /// </summary>
+    public sealed class PivotPlusSemanticArtifactTransition
+    {
+        public PivotPlusArtifactKind Kind { get; set; }
+
+        public string ArtifactId { get; set; } = string.Empty;
+
+        public PivotPlusSemanticArtifactOperation Operation { get; set; }
+
+        /// <summary>
+        /// Exact live fingerprint before an Update or Delete. It must be empty
+        /// for Create.
+        /// </summary>
+        public string BeforeLiveFingerprint { get; set; } = string.Empty;
+
+        public string PlannedDefinitionFingerprint { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Bounded write-ahead receipt for a semantic model Apply. All values are
+    /// identifiers or canonical hashes; no generated definition, source member,
+    /// workbook path, or cell payload is retained.
+    /// </summary>
+    public sealed class PivotPlusPendingSemanticApplyMetadata
+    {
+        public string ApplyId { get; set; } = string.Empty;
+
+        public string PlanFingerprint { get; set; } = string.Empty;
+
+        public string BeforePivotFingerprint { get; set; } = string.Empty;
+
+        public string ExpectedPivotFingerprint { get; set; } = string.Empty;
+
+        public IList<PivotPlusSemanticArtifactTransition> Transitions { get; set; } =
+            new List<PivotPlusSemanticArtifactTransition>();
     }
 
     /// <summary>
@@ -110,7 +159,9 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Persistence
 
         public const string Version1_2 = "1.2";
 
-        public const string CurrentSchemaVersion = "1.3";
+        public const string Version1_3 = "1.3";
+
+        public const string CurrentSchemaVersion = "1.4";
 
         public string SchemaVersion { get; set; } = CurrentSchemaVersion;
 
@@ -136,6 +187,12 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Persistence
 
         public IList<PivotPlusOwnedArtifact> Artifacts { get; set; } =
             new List<PivotPlusOwnedArtifact>();
+
+        /// <summary>
+        /// At most one semantic Apply can be pending. This write-ahead receipt
+        /// is mutually exclusive with classic-to-Data-Model recovery.
+        /// </summary>
+        public PivotPlusPendingSemanticApplyMetadata? PendingSemanticApply { get; set; }
 
         /// <summary>
         /// At most one Apply can be undone. Assigning a new record replaces the
@@ -199,6 +256,7 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Persistence
     internal static class PivotPlusMetadataValidator
     {
         public const int MaxArtifacts = 128;
+        public const int MaxSemanticTransitions = 128;
         public const int MaxUndoArtifacts = 128;
         public const int MaxUndoFieldPlacements = 256;
         public const int MaxSerializedCharacters = 256 * 1024;
@@ -271,6 +329,8 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Persistence
 
             ValidateRecovery(metadata);
 
+            ValidatePendingSemanticApply(metadata);
+
             if (metadata.Undo != null)
             {
                 ValidateUndo(metadata.Undo, metadata.Artifacts, metadata.SchemaVersion);
@@ -290,6 +350,10 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Persistence
                    string.Equals(
                        version,
                        PivotPlusWorkbookMetadata.Version1_2,
+                       StringComparison.Ordinal) ||
+                   string.Equals(
+                       version,
+                       PivotPlusWorkbookMetadata.Version1_3,
                        StringComparison.Ordinal) ||
                    string.Equals(
                        version,
@@ -382,10 +446,7 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Persistence
             }
 
             if (artifact.Kind == PivotPlusArtifactKind.TemporaryPivotTable &&
-                !string.Equals(
-                    schemaVersion,
-                    PivotPlusWorkbookMetadata.CurrentSchemaVersion,
-                    StringComparison.Ordinal))
+                !SupportsRecovery(schemaVersion))
             {
                 throw new ArgumentException(
                     "Temporary PivotTable ownership requires PivotTable+ metadata version 1.3.",
@@ -398,16 +459,13 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Persistence
 
         private static void ValidateRecovery(PivotPlusWorkbookMetadata metadata)
         {
-            bool current = string.Equals(
-                metadata.SchemaVersion,
-                PivotPlusWorkbookMetadata.CurrentSchemaVersion,
-                StringComparison.Ordinal);
+            bool supportsRecovery = SupportsRecovery(metadata.SchemaVersion);
             int temporaryWorksheets = metadata.Artifacts.Count(item =>
                 item.Kind == PivotPlusArtifactKind.TemporaryWorksheet);
             int temporaryPivots = metadata.Artifacts.Count(item =>
                 item.Kind == PivotPlusArtifactKind.TemporaryPivotTable);
 
-            if (!current)
+            if (!supportsRecovery)
             {
                 if (metadata.RecoveryPhase != PivotPlusRecoveryPhase.None ||
                     !string.IsNullOrEmpty(metadata.TargetAnchorAddress) ||
@@ -460,6 +518,151 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Persistence
             ValidateFingerprint(
                 metadata.StagingStateFingerprint,
                 "staging state fingerprint");
+        }
+
+        private static bool SupportsRecovery(string schemaVersion)
+        {
+            return string.Equals(
+                       schemaVersion,
+                       PivotPlusWorkbookMetadata.Version1_3,
+                       StringComparison.Ordinal) ||
+                   string.Equals(
+                       schemaVersion,
+                       PivotPlusWorkbookMetadata.CurrentSchemaVersion,
+                       StringComparison.Ordinal);
+        }
+
+        private static void ValidatePendingSemanticApply(PivotPlusWorkbookMetadata metadata)
+        {
+            PivotPlusPendingSemanticApplyMetadata? pending = metadata.PendingSemanticApply;
+            if (pending == null)
+            {
+                return;
+            }
+
+            if (!string.Equals(
+                    metadata.SchemaVersion,
+                    PivotPlusWorkbookMetadata.CurrentSchemaVersion,
+                    StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    "Pending semantic Apply metadata requires PivotTable+ metadata version 1.4.",
+                    nameof(metadata));
+            }
+
+            if (metadata.RecoveryPhase != PivotPlusRecoveryPhase.None)
+            {
+                throw new ArgumentException(
+                    "A pending semantic Apply is mutually exclusive with conversion recovery.",
+                    nameof(metadata));
+            }
+
+            ValidateId(pending.ApplyId, "semantic Apply identifier");
+            ValidateFingerprint(pending.PlanFingerprint, "semantic plan fingerprint");
+            ValidateFingerprint(
+                pending.BeforePivotFingerprint,
+                "before-PivotTable fingerprint");
+            ValidateFingerprint(
+                pending.ExpectedPivotFingerprint,
+                "expected-PivotTable fingerprint");
+
+            if (pending.Transitions == null)
+            {
+                throw new ArgumentException(
+                    "The pending semantic transition list cannot be null.",
+                    nameof(metadata));
+            }
+
+            if (pending.Transitions.Count > MaxSemanticTransitions)
+            {
+                throw new ArgumentException(
+                    "A pending semantic Apply exceeds the transition limit.",
+                    nameof(metadata));
+            }
+
+            var transitionKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (PivotPlusSemanticArtifactTransition transition in pending.Transitions)
+            {
+                if (transition == null)
+                {
+                    throw new ArgumentException(
+                        "A pending semantic transition cannot be null.",
+                        nameof(metadata));
+                }
+
+                if (transition.Kind != PivotPlusArtifactKind.Measure &&
+                    transition.Kind != PivotPlusArtifactKind.NamedSet)
+                {
+                    throw new ArgumentException(
+                        "A semantic transition can target only a measure or named set.",
+                        nameof(metadata));
+                }
+
+                ValidateArtifactName(transition.ArtifactId);
+                if (!Enum.IsDefined(
+                        typeof(PivotPlusSemanticArtifactOperation),
+                        transition.Operation))
+                {
+                    throw new ArgumentException(
+                        "The semantic artifact operation is invalid.",
+                        nameof(metadata));
+                }
+
+                ValidateFingerprint(
+                    transition.PlannedDefinitionFingerprint,
+                    "planned-definition fingerprint");
+
+                string transitionKey = ArtifactKey(
+                    transition.Kind,
+                    transition.ArtifactId);
+                if (!transitionKeys.Add(transitionKey))
+                {
+                    throw new InvalidOperationException(
+                        "A pending semantic Apply contains a duplicate artifact identity.");
+                }
+
+                PivotPlusOwnedArtifact? prior = metadata.Artifacts.SingleOrDefault(artifact =>
+                    artifact.Kind == transition.Kind &&
+                    string.Equals(
+                        artifact.ArtifactId,
+                        transition.ArtifactId,
+                        StringComparison.OrdinalIgnoreCase));
+
+                if (transition.Operation == PivotPlusSemanticArtifactOperation.Create)
+                {
+                    if (!string.IsNullOrEmpty(transition.BeforeLiveFingerprint))
+                    {
+                        throw new ArgumentException(
+                            "A semantic Create transition cannot contain a before-live fingerprint.",
+                            nameof(metadata));
+                    }
+
+                    if (prior != null)
+                    {
+                        throw new InvalidOperationException(
+                            "A semantic Create transition cannot replace a currently owned artifact.");
+                    }
+
+                    continue;
+                }
+
+                ValidateFingerprint(
+                    transition.BeforeLiveFingerprint,
+                    "before-live fingerprint");
+                if (prior == null ||
+                    !string.Equals(
+                        prior.ArtifactId,
+                        transition.ArtifactId,
+                        StringComparison.Ordinal) ||
+                    !string.Equals(
+                        prior.Fingerprint,
+                        transition.BeforeLiveFingerprint,
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        "A semantic Update or Delete transition must exactly match current owned-artifact truth.");
+                }
+            }
         }
 
         public static void ValidateLocalA1Address(string value)
