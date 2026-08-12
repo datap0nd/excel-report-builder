@@ -1,6 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 $xamlPath = "src\ExcelReportBuilder.AddIn\Views\PivotPlusView.xaml"
+$viewPath = "src\ExcelReportBuilder.AddIn\Views\PivotPlusView.xaml.cs"
 $viewModelPath = "src\ExcelReportBuilder.AddIn\Presentation\PivotPlusViewModel.cs"
 $hostContractPath = "src\ExcelReportBuilder.AddIn\Host\PivotPlusHostContracts.cs"
 $hostPath = "src\ExcelReportBuilder.AddIn\Host\ExcelPivotPlusHostService.cs"
@@ -9,6 +10,7 @@ $taskPaneHostPath = "src\ExcelReportBuilder.AddIn\Hosting\TaskPaneHost.cs"
 $ribbonPath = "src\ExcelReportBuilder.AddIn\Ribbon\RibbonMarkup.cs"
 
 $xaml = Get-Content -LiteralPath $xamlPath -Raw
+$view = Get-Content -LiteralPath $viewPath -Raw
 $viewModel = Get-Content -LiteralPath $viewModelPath -Raw
 $hostContract = Get-Content -LiteralPath $hostContractPath -Raw
 $hostSource = Get-Content -LiteralPath $hostPath -Raw
@@ -48,6 +50,12 @@ if ($null -eq $parsed.DocumentElement) {
     throw "PivotTable+ XAML is not well formed."
 }
 
+if (-not $view.Contains('Dispatcher.Yield(DispatcherPriority.ContextIdle)') -or
+    $view.IndexOf('Dispatcher.Yield(DispatcherPriority.ContextIdle)') -gt
+        $view.IndexOf('viewModel.InitializeAsync()')) {
+    throw "The PivotTable+ pane must yield out of Office's creation callback before inspecting Excel."
+}
+
 foreach ($value in @(
     'Task<PivotPlusPaneSnapshot> InspectAsync(',
     'Task<PivotPlusPaneSnapshot> ApplyLayoutAsync(',
@@ -83,8 +91,9 @@ if (-not $viewModel.Contains('HasPendingChanges') -or
 
 if (-not $bootstrapper.Contains('Func<IPivotPlusHostService>') -or
     -not $taskPaneHost.Contains('new PivotPlusView(') -or
+    -not $taskPaneHost.Contains('RenderMode.SoftwareOnly') -or
     $taskPaneHost.Contains('new ReportBuilderView(')) {
-    throw "The COM task-pane host must compose PivotTable+, not the retired report workbench."
+    throw "The COM task-pane host must compose a software-rendered PivotTable+, not the retired report workbench."
 }
 
 if (-not $ribbon.Contains('label=""PivotTable+""') -or

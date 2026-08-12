@@ -3,6 +3,8 @@ using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using System.Windows.Forms.Integration;
+using System.Windows.Interop;
+using WpfRenderOptions = System.Windows.Media.RenderOptions;
 using ExcelReportBuilder.AddIn.Views;
 using Microsoft.Win32;
 
@@ -22,6 +24,12 @@ namespace ExcelReportBuilder.AddIn.Hosting
 
         public TaskPaneHost()
         {
+            // Office custom task panes host WPF through a WinForms ActiveX control.
+            // Some Office/graphics-driver combinations expose the ElementHost as a
+            // black surface when WPF uses hardware composition. The pane is small
+            // and interaction-heavy, so software composition is the reliable choice.
+            WpfRenderOptions.ProcessRenderMode = RenderMode.SoftwareOnly;
+
             AutoScaleMode = AutoScaleMode.Dpi;
             BackColor = Color.White;
             AccessibleName = "PivotTable Plus task pane";
