@@ -121,6 +121,11 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Native
 
         void ClearLayout(object pivotTable, PivotSourceKind sourceKind);
 
+        void RemoveFieldsNotInPlan(
+            object pivotTable,
+            PivotSourceKind sourceKind,
+            IReadOnlyList<NativePivotFieldCommand> desiredFields);
+
         void PlaceField(
             object pivotTable,
             PivotSourceKind sourceKind,
@@ -200,8 +205,23 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Native
             var steps = new List<PivotMutationStep>
             {
                 new PivotMutationStep(
-                    "clear-native-layout",
-                    () => adapter.ClearLayout(pivotTable, plan.SourceKind),
+                    definition.ClearAll
+                        ? "clear-native-layout"
+                        : "remove-unplaced-native-fields",
+                    () =>
+                    {
+                        if (definition.ClearAll)
+                        {
+                            adapter.ClearLayout(pivotTable, plan.SourceKind);
+                        }
+                        else
+                        {
+                            adapter.RemoveFieldsNotInPlan(
+                                pivotTable,
+                                plan.SourceKind,
+                                plan.Fields);
+                        }
+                    },
                     () => adapter.RestoreState(pivotTable, snapshot))
             };
             steps.AddRange(plan.Fields.Select(command => new PivotMutationStep(
@@ -277,7 +297,8 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Native
                     ValuesAxis = definition.Layout.ValuesAxis,
                     ValuesPosition = definition.Layout.ValuesPosition,
                     PivotTableStyleName = definition.Format.PivotTableStyleName,
-                    SetPivotTableStyle = definition.Format.PivotTableStyleName != null,
+                    SetPivotTableStyle = !string.IsNullOrWhiteSpace(
+                        definition.Format.PivotTableStyleName),
                     PreserveFormatting = definition.Format.PreserveFormatting,
                     ShowRowStripes = definition.Format.ShowRowStripes,
                     ShowColumnStripes = definition.Format.ShowColumnStripes

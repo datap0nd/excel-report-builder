@@ -122,16 +122,17 @@
                                Foreground="{StaticResource Excel}"
                                FontSize="11" />
                 </StackPanel>
-                <Button Grid.Column="1"
-                        Content="↻"
-                        Width="31"
-                        Command="{Binding RefreshCommand}"
-                        ToolTip="Refresh selected PivotTable (Ctrl+R)"
-                        AutomationProperties.Name="Refresh selected PivotTable" />
+                <Border Grid.Column="1"
+                        Padding="7,3"
+                        Background="#E7F3EC"
+                        CornerRadius="10"
+                        VerticalAlignment="Center">
+                    <TextBlock Text="Live sync" Foreground="{StaticResource Excel}" FontSize="11" />
+                </Border>
             </Grid>
         </Border>
 
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Margin="12,10,12,16">
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -144,7 +145,7 @@
                             Command="{Binding OpenExcelFieldListCommand}"
                             AutomationProperties.Name="Open Excel's native PivotTable Fields pane" />
                 </Grid>
-                <TextBlock Text="Use Excel's familiar pane for normal drag-and-drop, or make a preview here."
+                <TextBlock Text="Drag one or more fields into Filters, Columns, Rows, or Values. Drag placed fields to reorder or move them."
                            Margin="0,4,0,8"
                            Foreground="{StaticResource Muted}"
                            TextWrapping="Wrap" />
@@ -153,11 +154,14 @@
                          ToolTip="Search fields" />
                 <ListBox ItemsSource="{Binding Fields}"
                          SelectedItem="{Binding SelectedField}"
+                         SelectionMode="Extended"
                          MinHeight="90"
                          MaxHeight="170"
                          Margin="0,5,0,0"
                          BorderBrush="{StaticResource Rule}"
                          BorderThickness="1"
+                         PreviewMouseLeftButtonDown="OnDragOriginMouseDown"
+                         PreviewMouseMove="OnFieldListMouseMove"
                          AutomationProperties.Name="Available PivotTable fields">
                     <ListBox.ItemTemplate>
                         <DataTemplate>
@@ -172,14 +176,7 @@
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
-                <UniformGrid Columns="4" Margin="0,5,0,0">
-                    <Button Content="Filters" Command="{Binding AddFieldCommand}" CommandParameter="Filter" Margin="0,0,3,0" />
-                    <Button Content="Columns" Command="{Binding AddFieldCommand}" CommandParameter="Column" Margin="1,0,2,0" />
-                    <Button Content="Rows" Command="{Binding AddFieldCommand}" CommandParameter="Row" Margin="2,0,1,0" />
-                    <Button Content="Values" Command="{Binding AddFieldCommand}" CommandParameter="Values" Margin="3,0,0,0" />
-                </UniformGrid>
-
-                <TextBlock Text="Arrange fields by area" Margin="0,14,0,5" FontSize="14" FontWeight="SemiBold" />
+                <TextBlock Text="Drop fields into an area" Margin="0,10,0,5" FontSize="14" FontWeight="SemiBold" />
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -194,29 +191,52 @@
                     <StackPanel Grid.Row="0" Grid.Column="0">
                         <TextBlock Text="Filters" Margin="0,0,0,3" Foreground="{StaticResource Muted}" />
                         <ListBox ItemsSource="{Binding Filters}" SelectedItem="{Binding SelectedPlacement}"
-                                 ItemTemplate="{StaticResource PlacementTemplate}" Style="{StaticResource AreaList}" />
+                                 ItemTemplate="{StaticResource PlacementTemplate}" Style="{StaticResource AreaList}"
+                                 Tag="Filter" AllowDrop="True"
+                                 PreviewMouseLeftButtonDown="OnDragOriginMouseDown"
+                                 PreviewMouseMove="OnPlacementListMouseMove"
+                                 PreviewKeyDown="OnPlacementKeyDown"
+                                 DragOver="OnAreaDragOver" Drop="OnAreaDrop"
+                                 AutomationProperties.Name="Filters drop area" />
                     </StackPanel>
                     <StackPanel Grid.Row="0" Grid.Column="2">
                         <TextBlock Text="Columns" Margin="0,0,0,3" Foreground="{StaticResource Muted}" />
                         <ListBox ItemsSource="{Binding Columns}" SelectedItem="{Binding SelectedPlacement}"
-                                 ItemTemplate="{StaticResource PlacementTemplate}" Style="{StaticResource AreaList}" />
+                                 ItemTemplate="{StaticResource PlacementTemplate}" Style="{StaticResource AreaList}"
+                                 Tag="Column" AllowDrop="True"
+                                 PreviewMouseLeftButtonDown="OnDragOriginMouseDown"
+                                 PreviewMouseMove="OnPlacementListMouseMove"
+                                 PreviewKeyDown="OnPlacementKeyDown"
+                                 DragOver="OnAreaDragOver" Drop="OnAreaDrop"
+                                 AutomationProperties.Name="Columns drop area" />
                     </StackPanel>
                     <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,8,0,0">
                         <TextBlock Text="Rows" Margin="0,0,0,3" Foreground="{StaticResource Muted}" />
                         <ListBox ItemsSource="{Binding Rows}" SelectedItem="{Binding SelectedPlacement}"
-                                 ItemTemplate="{StaticResource PlacementTemplate}" Style="{StaticResource AreaList}" />
+                                 ItemTemplate="{StaticResource PlacementTemplate}" Style="{StaticResource AreaList}"
+                                 Tag="Row" AllowDrop="True"
+                                 PreviewMouseLeftButtonDown="OnDragOriginMouseDown"
+                                 PreviewMouseMove="OnPlacementListMouseMove"
+                                 PreviewKeyDown="OnPlacementKeyDown"
+                                 DragOver="OnAreaDragOver" Drop="OnAreaDrop"
+                                 AutomationProperties.Name="Rows drop area" />
                     </StackPanel>
                     <StackPanel Grid.Row="1" Grid.Column="2" Margin="0,8,0,0">
                         <TextBlock Text="Values" Margin="0,0,0,3" Foreground="{StaticResource Muted}" />
                         <ListBox ItemsSource="{Binding Values}" SelectedItem="{Binding SelectedPlacement}"
-                                 ItemTemplate="{StaticResource PlacementTemplate}" Style="{StaticResource AreaList}" />
+                                 ItemTemplate="{StaticResource PlacementTemplate}" Style="{StaticResource AreaList}"
+                                 Tag="Values" AllowDrop="True"
+                                 PreviewMouseLeftButtonDown="OnDragOriginMouseDown"
+                                 PreviewMouseMove="OnPlacementListMouseMove"
+                                 PreviewKeyDown="OnPlacementKeyDown"
+                                 DragOver="OnAreaDragOver" Drop="OnAreaDrop"
+                                 AutomationProperties.Name="Values drop area" />
                     </StackPanel>
                 </Grid>
-                <WrapPanel Margin="0,6,0,0">
-                    <Button Content="Remove" Command="{Binding RemoveFieldCommand}" Margin="0,0,5,0" />
-                    <Button Content="Move up" Command="{Binding MoveUpCommand}" Margin="0,0,5,0" />
-                    <Button Content="Move down" Command="{Binding MoveDownCommand}" />
-                </WrapPanel>
+                <TextBlock Text="Tip: press Delete to remove a selected placed field."
+                           Margin="0,5,0,0"
+                           Foreground="{StaticResource Muted}"
+                           FontSize="10" />
                 <Grid Margin="0,7,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
@@ -236,75 +256,92 @@
                 </Grid>
 
                 <Border Margin="0,16,0,0" BorderBrush="{StaticResource Rule}" BorderThickness="0,1,0,0" />
-                <TextBlock Text="Extras" Margin="0,12,0,0" FontSize="14" FontWeight="SemiBold" />
-                <Border Margin="0,7,0,3"
-                        Padding="8"
-                        Background="#F3F3F3"
-                        BorderBrush="{StaticResource Rule}"
-                        BorderThickness="1">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Text="Classic PivotTable? Enable the Data Model once to unlock validated measures and asymmetric layouts."
-                                   TextWrapping="Wrap"
-                                   Foreground="{StaticResource Muted}" />
-                        <Button Grid.Column="1"
-                                Content="Enable PivotTable+"
-                                Margin="8,0,0,0"
-                                Command="{Binding EnableDataModelCommand}"
-                                AutomationProperties.Name="Enable PivotTable Plus Data Model" />
-                    </Grid>
-                </Border>
-                <TextBlock Text="Portion of parent"
-                           Margin="0,7,0,0"
-                           FontWeight="SemiBold" />
-                <TextBlock Text="Add a real Data Model measure that divides each detail row by its parent."
-                           Margin="0,2,0,7"
-                           Foreground="{StaticResource Muted}"
-                           TextWrapping="Wrap" />
-                <TextBlock Text="Value field" Foreground="{StaticResource Muted}" />
-                <ComboBox ItemsSource="{Binding PortionValueFields}"
-                          SelectedItem="{Binding SelectedPortionValueField}"
-                          DisplayMemberPath="Caption"
-                          AutomationProperties.Name="Portion numeric value field" />
-                <TextBlock Text="Detail row field" Margin="0,6,0,0" Foreground="{StaticResource Muted}" />
-                <ComboBox ItemsSource="{Binding PortionDetailFields}"
-                          SelectedItem="{Binding SelectedPortionDetailField}"
-                          DisplayMemberPath="Caption"
-                          AutomationProperties.Name="Portion detail row field" />
-                <TextBlock Text="Measure name" Margin="0,6,0,0" Foreground="{StaticResource Muted}" />
-                <TextBox Text="{Binding PortionCaption, UpdateSourceTrigger=PropertyChanged}"
-                         AutomationProperties.Name="Portion measure name" />
-                <Grid Margin="0,7,0,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <Button Content="Add Portion %"
-                            Command="{Binding AddPortionCommand}"
-                            Style="{StaticResource PrimaryButton}"
-                            HorizontalAlignment="Left"
-                            AutomationProperties.Name="Add parent portion measure" />
-                    <Button Grid.Column="1"
-                            Content="Undo extra"
-                            Command="{Binding UndoCommand}"
-                            Margin="6,0,0,0"
-                            ToolTip="Undo last extra (Ctrl+Shift+Z)"
-                            AutomationProperties.Name="Undo last PivotTable Plus extra" />
-                </Grid>
-                <TextBlock Text="Data Model required. Unsupported requests stop with an explanation; no helper table is created."
-                           Margin="0,6,0,0"
-                           Foreground="{StaticResource Muted}"
-                           TextWrapping="Wrap" />
+                <TextBlock Text="Extras" Margin="0,12,0,5" FontSize="14" FontWeight="SemiBold" />
+
+                <Expander Header="Advanced engine" IsExpanded="False" Margin="0,2,0,0"
+                          AutomationProperties.Name="Advanced engine feature">
+                    <Border Padding="8" Background="#F7F7F7" BorderBrush="{StaticResource Rule}" BorderThickness="1">
+                        <StackPanel>
+                            <TextBlock Text="Enable the workbook Data Model once to unlock validated measures and asymmetric layouts."
+                                       TextWrapping="Wrap" Foreground="{StaticResource Muted}" />
+                            <Button Content="Enable PivotTable+"
+                                    Margin="0,7,0,0" HorizontalAlignment="Left"
+                                    Command="{Binding EnableDataModelCommand}"
+                                    AutomationProperties.Name="Enable PivotTable Plus Data Model" />
+                        </StackPanel>
+                    </Border>
+                </Expander>
+
+                <Expander Header="Dates &amp; periods" IsExpanded="False" Margin="0,5,0,0"
+                          AutomationProperties.Name="Dates and periods feature">
+                    <Border Padding="8" Background="#F7F7F7" BorderBrush="{StaticResource Rule}" BorderThickness="1">
+                        <StackPanel>
+                            <TextBlock Text="{Binding PeriodSummary}" FontWeight="SemiBold" />
+                            <TextBlock Text="Select several month fields with Ctrl or Shift, then drag them together into Values. Drag a Date, Month, Quarter, or Year field into Columns."
+                                       Margin="0,3,0,6" TextWrapping="Wrap" Foreground="{StaticResource Muted}" />
+                            <ListBox ItemsSource="{Binding PeriodFields}"
+                                     SelectedItem="{Binding SelectedPeriodField}"
+                                     SelectionMode="Extended" MinHeight="42" MaxHeight="105"
+                                     PreviewMouseLeftButtonDown="OnDragOriginMouseDown"
+                                     PreviewMouseMove="OnFieldListMouseMove"
+                                     AutomationProperties.Name="Detected date and period fields">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Caption}" Margin="4,3" />
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                            <WrapPanel Margin="0,7,0,0">
+                                <Button Content="Month" Command="{Binding GroupDateCommand}" CommandParameter="Months" Margin="0,0,5,5" />
+                                <Button Content="Quarter" Command="{Binding GroupDateCommand}" CommandParameter="Quarters" Margin="0,0,5,5" />
+                                <Button Content="Year" Command="{Binding GroupDateCommand}" CommandParameter="Years" Margin="0,0,5,5" />
+                                <Button Content="Ungroup" Command="{Binding GroupDateCommand}" CommandParameter="Ungrouped" Margin="0,0,5,5" />
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+                </Expander>
+
+                <Expander Header="Portion %" IsExpanded="False" Margin="0,5,0,0"
+                          AutomationProperties.Name="Portion percent feature">
+                    <Border Padding="8" Background="#F7F7F7" BorderBrush="{StaticResource Rule}" BorderThickness="1">
+                        <StackPanel>
+                            <TextBlock Text="Add Portion % directly inside this native PivotTable. Each detail row is divided by its immediate parent."
+                                       Margin="0,0,0,7" Foreground="{StaticResource Muted}" TextWrapping="Wrap" />
+                            <TextBlock Text="Value field" Foreground="{StaticResource Muted}" />
+                            <ComboBox ItemsSource="{Binding PortionValueFields}"
+                                      SelectedItem="{Binding SelectedPortionValueField}"
+                                      DisplayMemberPath="Caption"
+                                      AutomationProperties.Name="Portion numeric value field" />
+                            <TextBlock Text="Detail row field" Margin="0,6,0,0" Foreground="{StaticResource Muted}" />
+                            <ComboBox ItemsSource="{Binding PortionDetailFields}"
+                                      SelectedItem="{Binding SelectedPortionDetailField}"
+                                      DisplayMemberPath="Caption"
+                                      AutomationProperties.Name="Portion detail row field" />
+                            <Grid Margin="0,7,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Button Content="Add Portion %"
+                                        Command="{Binding AddPortionCommand}"
+                                        Style="{StaticResource PrimaryButton}"
+                                        HorizontalAlignment="Left"
+                                        AutomationProperties.Name="Add Portion percent measure" />
+                                <Button Grid.Column="1" Content="Undo"
+                                        Command="{Binding UndoCommand}" Margin="6,0,0,0"
+                                        ToolTip="Undo last extra (Ctrl+Shift+Z)"
+                                        AutomationProperties.Name="Undo last PivotTable Plus extra" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </Expander>
             </StackPanel>
         </ScrollViewer>
 
-        <Border Grid.Row="2"
+        <Border Grid.Row="1"
                 Background="{StaticResource Subtle}"
                 BorderBrush="{StaticResource Rule}"
-                BorderThickness="0,1,0,0"
+                BorderThickness="0,0,0,1"
                 Padding="12,8">
             <Grid>
                 <Grid.ColumnDefinitions>

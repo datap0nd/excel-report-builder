@@ -45,15 +45,22 @@ namespace ExcelReportBuilder.Excel.PivotPlus
     {
         private sealed class SessionIdentity
         {
-            public SessionIdentity(string value)
+            public SessionIdentity(object workbook, string value)
             {
+                Workbook = workbook ?? throw new ArgumentNullException(nameof(workbook));
                 Value = value;
             }
+
+            public object Workbook { get; }
 
             public string Value { get; }
         }
 
-        private static readonly ConditionalWeakTable<object, SessionIdentity> SessionIdentities =
+        private const int MaximumSessionWorkbooks = 64;
+        private static readonly object SessionIdentityGate = new object();
+        private static readonly List<SessionIdentity> SessionIdentities =
+            new List<SessionIdentity>();
+        private static readonly ConditionalWeakTable<object, SessionIdentity> ManagedSessionIdentities =
             new ConditionalWeakTable<object, SessionIdentity>();
         private readonly WorkbookIdentityStore store = new WorkbookIdentityStore();
 
@@ -67,9 +74,39 @@ namespace ExcelReportBuilder.Excel.PivotPlus
                 return stored!;
             }
 
-            return SessionIdentities.GetValue(
-                workbook,
-                _ => new SessionIdentity("workbook_" + Guid.NewGuid().ToString("N"))).Value;
+            // Managed test doubles and hosts already have stable object identity. Keeping
+            // them in the COM registry would retain every short-lived workbook instance.
+            if (!Marshal.IsComObject(workbook))
+            {
+                return ManagedSessionIdentities.GetValue(
+                    workbook,
+                    key => new SessionIdentity(
+                        key,
+                        "workbook_" + Guid.NewGuid().ToString("N"))).Value;
+            }
+
+            lock (SessionIdentityGate)
+            {
+                SessionIdentity? existing = SessionIdentities.FirstOrDefault(item =>
+                    ReferenceEquals(item.Workbook, workbook) ||
+                    ComObjectIdentity.AreSame(item.Workbook, workbook));
+                if (existing != null)
+                {
+                    return existing.Value;
+                }
+
+                if (SessionIdentities.Count >= MaximumSessionWorkbooks)
+                {
+                    throw new InvalidOperationException(
+                        "PivotTable+ has reached its bounded workbook-session limit. Restart Excel before opening more workbooks.");
+                }
+
+                var created = new SessionIdentity(
+                    workbook,
+                    "workbook_" + Guid.NewGuid().ToString("N"));
+                SessionIdentities.Add(created);
+                return created.Value;
+            }
         }
 
         public void Persist(object workbook, string expectedWorkbookId)
@@ -788,9 +825,14 @@ namespace ExcelReportBuilder.Excel.PivotPlus
             if (collection != null)
             {
                 complete = true;
+                object? dataPivotField = null;
+                PivotLateBound.TryRead(
+                    () => (object?)pivot.DataPivotField,
+                    out dataPivotField);
                 return ReadFields(
                     collection,
-                    (field, _) => ReadField(field, 0, readNestedCubeField: !cubeFields));
+                    (field, _) => ReadField(field, 0, readNestedCubeField: !cubeFields),
+                    dataPivotField);
             }
 
             complete = false;
@@ -986,8 +1028,7 @@ namespace ExcelReportBuilder.Excel.PivotPlus
         private static PivotFormatMetadata ReadFormatMetadata(dynamic pivot)
         {
             return new PivotFormatMetadata(
-                pivotTableStyleName: NullIfEmpty(
-                    ReadOptionalString(() => (object?)pivot.TableStyle2)),
+                pivotTableStyleName: ReadPivotTableStyleName(pivot),
                 preserveFormatting: ReadOptionalBoolean(
                     () => (object?)pivot.PreserveFormatting,
                     fallback: true),
@@ -1037,7 +1078,7 @@ namespace ExcelReportBuilder.Excel.PivotPlus
                     () => ReadCollectionItem(collection, index),
                     "Excel did not expose a PivotTable field at index " +
                     index.ToString(CultureInfo.InvariantCulture) + ".");
-                if (ComObjectIdentity.AreSame(field, excludedField))
+                if (IsExcludedPseudoField(field, excludedField))
                 {
                     continue;
                 }
@@ -1047,6 +1088,25 @@ namespace ExcelReportBuilder.Excel.PivotPlus
             }
 
             return result;
+        }
+
+        private static bool IsExcludedPseudoField(object field, object? excludedField)
+        {
+            if (ComObjectIdentity.AreSame(field, excludedField)) return true;
+            if (excludedField == null) return false;
+
+            dynamic candidate = field;
+            dynamic excluded = excludedField;
+            string candidateName = ReadOptionalString(() => (object?)candidate.Name);
+            string excludedName = ReadOptionalString(() => (object?)excluded.Name);
+            if (string.IsNullOrWhiteSpace(candidateName) ||
+                string.IsNullOrWhiteSpace(excludedName))
+            {
+                return false;
+            }
+
+            return string.Equals(candidateName, excludedName, StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(candidateName, excludedName + "Field", StringComparison.OrdinalIgnoreCase);
         }
 
         private static object? ReadCollectionItem(dynamic collection, int index)
@@ -1135,6 +1195,7 @@ namespace ExcelReportBuilder.Excel.PivotPlus
                 ReadOptionalBoolean(() => (object?)field.IsCalculated, fallback: false),
                 ReadOptionalNullableBoolean(() => (object?)field.RepeatLabels));
         }
+
 
         private static DiscoveredPivotFieldKind ReadCubeFieldKind(dynamic field)
         {
@@ -1283,6 +1344,36 @@ namespace ExcelReportBuilder.Excel.PivotPlus
             }
 
             return Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
+        }
+
+        private static string? ReadPivotTableStyleName(dynamic pivot)
+        {
+            if (!PivotLateBound.TryRead(() => (object?)pivot.TableStyle2, out object? value) ||
+                value == null)
+            {
+                return null;
+            }
+
+            if (value is string text)
+            {
+                return NullIfEmpty(text);
+            }
+
+            dynamic style = value;
+            if (PivotLateBound.TryRead(() => (object?)style.Name, out object? name) &&
+                name != null)
+            {
+                string resolved = Convert.ToString(name, CultureInfo.InvariantCulture) ?? string.Empty;
+                if (!string.Equals(resolved, "System.__ComObject", StringComparison.Ordinal))
+                {
+                    return NullIfEmpty(resolved);
+                }
+            }
+
+            string fallback = Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
+            return string.Equals(fallback, "System.__ComObject", StringComparison.Ordinal)
+                ? null
+                : NullIfEmpty(fallback);
         }
 
         private static bool ReadOptionalBoolean(Func<object?> reader, bool fallback)

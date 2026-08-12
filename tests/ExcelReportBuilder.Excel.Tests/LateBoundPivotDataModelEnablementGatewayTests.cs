@@ -440,6 +440,13 @@ public sealed class LateBoundPivotDataModelEnablementGatewayTests
     }
 
     [Fact]
+    public void CaptureGuard_AcceptsOrdinaryExcel2021FieldWithoutIsCalculated()
+    {
+        LateBoundPivotDataModelEnablementGateway
+            .DemandNoCalculatedOrGroupedField(new FakeOrdinaryExcel2021Field());
+    }
+
+    [Fact]
     public void CaptureGuard_RejectsUnplacedCalculatedFieldInPivotCache()
     {
         NotSupportedException exception = Assert.Throws<NotSupportedException>(
@@ -478,7 +485,7 @@ public sealed class LateBoundPivotDataModelEnablementGatewayTests
             CanonicalConnectionContract.CommandText(artifacts.QueryName),
             workbook.Connections.CommandText);
         Assert.True(workbook.Connections.Connection.Refreshed);
-        Assert.False(workbook.Connections.Connection.OLEDBConnection.BackgroundQuery);
+        Assert.True(workbook.Connections.Connection.OLEDBConnection.BackgroundQuery);
         Assert.Same(
             workbook.Model.DataModelConnection,
             artifacts.NativeDataModelConnection);
@@ -1034,6 +1041,13 @@ public sealed class LateBoundPivotDataModelEnablementGatewayTests
         Assert.Throws<NotSupportedException>(() =>
             LateBoundPivotDataModelEnablementGateway.DemandNoNativePivotFilters(
                 new FakeUnreadablePivotFiltersField()));
+    }
+
+    [Fact]
+    public void CaptureGuard_AcceptsExcel2021NoPivotFiltersComResult()
+    {
+        LateBoundPivotDataModelEnablementGateway.DemandNoNativePivotFilters(
+            new FakeNoPivotFiltersField());
     }
 
     [Fact]
@@ -3704,6 +3718,23 @@ public sealed class LateBoundPivotDataModelEnablementGatewayTests
         public bool IsCalculated => true;
     }
 
+    public sealed class FakeOrdinaryExcel2021Field
+    {
+        public object IsCalculated =>
+            throw new COMException("Member not found", unchecked((int)0x80020003));
+
+        public FakeCollection<object> CalculatedItems() =>
+            new FakeCollection<object>(Array.Empty<object>());
+
+        public object? ParentField => null;
+
+        public object? ChildField => null;
+
+        public string Name => "Region";
+
+        public string SourceName => "Region";
+    }
+
     public sealed class FakePivotWithCalculatedDefinition
     {
         public FakeCollection<object> PivotFields { get; } =
@@ -3931,6 +3962,8 @@ public sealed class LateBoundPivotDataModelEnablementGatewayTests
     public sealed class FakeCreatedOleDbConnection
     {
         public bool BackgroundQuery { get; set; } = true;
+
+        public bool Refreshing => false;
 
         public string Connection { get; set; } = string.Empty;
 
@@ -4965,6 +4998,12 @@ public sealed class LateBoundPivotDataModelEnablementGatewayTests
     {
         public object PivotFilters =>
             throw new InvalidOperationException("RPC read failed");
+    }
+
+    public sealed class FakeNoPivotFiltersField
+    {
+        public object PivotFilters =>
+            throw new COMException("Application-defined or object-defined error", unchecked((int)0x800A03EC));
     }
 
     public sealed class FakeAutoSortedField

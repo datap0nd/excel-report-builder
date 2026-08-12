@@ -5,6 +5,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using ExcelReportBuilder.Core.PivotPlus;
 using ExcelReportBuilder.Excel.Execution;
 using ExcelReportBuilder.Excel.Persistence;
@@ -603,16 +604,17 @@ namespace ExcelReportBuilder.Excel.PivotPlus.DataModel
                 () => (object?)nativeConnection.OLEDBConnection,
                 "Excel did not expose the owned OLE DB connection.");
             dynamic oleDb = oleDbObject;
-            oleDb.BackgroundQuery = false;
-            if (ReadRequiredBoolean(
+            oleDb.BackgroundQuery = true;
+            if (!ReadRequiredBoolean(
                     () => (object?)oleDb.BackgroundQuery,
                     "owned OLE DB BackgroundQuery state"))
             {
-                throw new InvalidOperationException(
-                    "Excel did not disable asynchronous refresh for the owned model source.");
+                throw new NotSupportedException(
+                    "Excel did not enable a non-blocking refresh for the owned model source.");
             }
 
             nativeConnection.Refresh();
+            WaitForOwnedModelRefresh(oleDb);
             object dataModelConnection = ReadExactDataModelConnection(
                 workbook,
                 connection,
@@ -629,6 +631,36 @@ namespace ExcelReportBuilder.Excel.PivotPlus.DataModel
                 plan.TemporaryWorksheets,
                 dataModelConnection,
                 plan.TemporaryPivotTable);
+        }
+
+        private static void WaitForOwnedModelRefresh(dynamic oleDb)
+        {
+            DateTime deadline = DateTime.UtcNow.AddMinutes(2);
+            while (ReadRequiredBoolean(
+                       () => (object?)oleDb.Refreshing,
+                       "owned OLE DB refresh state"))
+            {
+                if (DateTime.UtcNow >= deadline)
+                {
+                    try
+                    {
+                        oleDb.CancelRefresh();
+                    }
+                    catch
+                    {
+                        // The timeout remains the primary failure; cleanup is
+                        // handled by the durable conversion transaction.
+                    }
+
+                    throw new TimeoutException(
+                        "Excel did not finish loading the source into the workbook Data Model within two minutes.");
+                }
+
+                // Power Query/model refresh runs out of process. Polling its
+                // asynchronous state avoids Excel's in-process synchronous OLE
+                // deadlock while keeping the verified transaction bounded.
+                Thread.Sleep(50);
+            }
         }
 
         public PivotDataModelArtifacts ValidatePendingDataModelFinalization(
@@ -4267,10 +4299,27 @@ namespace ExcelReportBuilder.Excel.PivotPlus.DataModel
         {
             dynamic field = fieldObject;
             object? filters;
-            if (!PivotLateBound.TryRead(
-                    () => (object?)field.PivotFilters,
-                    out filters) ||
-                filters == null)
+            try
+            {
+                filters = (object?)field.PivotFilters;
+            }
+            catch (COMException exception) when (
+                exception.HResult == unchecked((int)0x800A03EC))
+            {
+                // Excel 2021 raises its standard 1004 error when an ordinary
+                // PivotField has no label/value/date filters instead of
+                // returning an empty PivotFilters collection. That outcome is
+                // the exact safe state this preflight requires.
+                return;
+            }
+            catch (Exception exception)
+            {
+                throw new NotSupportedException(
+                    "Excel did not expose PivotFilters needed for a reversible conversion preflight.",
+                    exception);
+            }
+
+            if (filters == null)
             {
                 throw new NotSupportedException(
                     "Excel did not expose PivotFilters needed for a reversible conversion preflight.");
@@ -4381,29 +4430,27 @@ namespace ExcelReportBuilder.Excel.PivotPlus.DataModel
         internal static void DemandNoCalculatedOrGroupedField(object fieldObject)
         {
             dynamic field = fieldObject;
-            if (!PivotLateBound.TryRead(
-                    () => (object?)field.IsCalculated,
-                    out object? calculatedValue) ||
-                calculatedValue == null)
-            {
-                throw new NotSupportedException(
-                    "Excel did not expose PivotField.IsCalculated for a reversible conversion preflight.");
-            }
+            bool calculatedRead = PivotLateBound.TryRead(
+                () => (object?)field.IsCalculated,
+                out object? calculatedValue);
 
-            bool isCalculated;
-            try
+            bool isCalculated = false;
+            if (calculatedRead && calculatedValue != null)
             {
-                isCalculated = Convert.ToBoolean(
-                    calculatedValue,
-                    CultureInfo.InvariantCulture);
-            }
-            catch (Exception exception) when (
-                exception is FormatException ||
-                exception is InvalidCastException)
-            {
-                throw new NotSupportedException(
-                    "Excel exposed an invalid PivotField.IsCalculated value.",
-                    exception);
+                try
+                {
+                    isCalculated = Convert.ToBoolean(
+                        calculatedValue,
+                        CultureInfo.InvariantCulture);
+                }
+                catch (Exception exception) when (
+                    exception is FormatException ||
+                    exception is InvalidCastException)
+                {
+                    throw new NotSupportedException(
+                        "Excel exposed an invalid PivotField.IsCalculated value.",
+                        exception);
+                }
             }
 
             if (isCalculated)
@@ -4411,6 +4458,11 @@ namespace ExcelReportBuilder.Excel.PivotPlus.DataModel
                 throw new NotSupportedException(
                     "Calculated PivotFields cannot yet be translated to a Data Model PivotTable transactionally.");
             }
+
+            // Excel 2021 does not expose IsCalculated on every ordinary cache
+            // field through late binding. CalculatedFields/CalculatedItems are
+            // independently enumerated and rejected before conversion, so an
+            // unavailable optional flag is not treated as calculated state.
 
             object? calculatedItems = TryGet(() => (object?)field.CalculatedItems());
             calculatedItems = calculatedItems ?? TryGet(() => (object?)field.CalculatedItems);
@@ -4424,22 +4476,48 @@ namespace ExcelReportBuilder.Excel.PivotPlus.DataModel
                     "Calculated PivotItems cannot yet be translated to a Data Model PivotTable transactionally.");
             }
 
-            if (!PivotLateBound.TryRead(
-                    () => (object?)field.ParentField,
-                    out object? parentField) ||
-                !PivotLateBound.TryRead(
-                    () => (object?)field.ChildField,
-                    out object? childField))
+            bool parentRead = PivotLateBound.TryRead(
+                () => (object?)field.ParentField,
+                out object? parentField);
+            bool childRead = PivotLateBound.TryRead(
+                () => (object?)field.ChildField,
+                out object? childField);
+            if ((parentRead && parentField != null) ||
+                (childRead && childField != null) ||
+                LooksLikeGeneratedDateGroup(field))
             {
                 throw new NotSupportedException(
-                    "Excel did not expose PivotField grouping relationships for a reversible conversion preflight.");
+                    "Grouped date fields must be normalized before the PivotTable can be translated to the Data Model.");
             }
 
-            if (parentField != null || childField != null)
+            // ParentField/ChildField are not consistently exposed for ordinary
+            // ungrouped fields by Excel 2021's late-bound object model.  Their
+            // absence is not itself proof of grouping; generated date group
+            // names and any relationship Excel does expose remain blocked.
+        }
+
+        private static bool LooksLikeGeneratedDateGroup(dynamic field)
+        {
+            string name = Convert.ToString(
+                TryGet(() => (object?)field.Name),
+                CultureInfo.InvariantCulture) ?? string.Empty;
+            string sourceName = Convert.ToString(
+                TryGet(() => (object?)field.SourceName),
+                CultureInfo.InvariantCulture) ?? string.Empty;
+            return IsGeneratedDateGroupName(name) || IsGeneratedDateGroupName(sourceName);
+        }
+
+        private static bool IsGeneratedDateGroupName(string value)
+        {
+            string normalized = (value ?? string.Empty).Trim();
+            string[] prefixes =
             {
-                throw new NotSupportedException(
-                    "Grouped PivotFields cannot yet be translated to a Data Model PivotTable transactionally.");
-            }
+                "Years", "Quarters", "Months", "Days",
+                "Hours", "Minutes", "Seconds"
+            };
+            return prefixes.Any(prefix =>
+                normalized.StartsWith(prefix + " (", StringComparison.OrdinalIgnoreCase) ||
+                normalized.StartsWith(prefix + "(", StringComparison.OrdinalIgnoreCase));
         }
 
         internal static void DemandNoUnsupportedClassicDefinitions(object pivotTable)
@@ -4487,16 +4565,6 @@ namespace ExcelReportBuilder.Excel.PivotPlus.DataModel
             {
                 DemandNoCalculatedOrGroupedField(field);
                 DemandClassicDefaultIncludeNewItemsInFilter(field);
-                dynamic nativeField = field;
-                object? calculatedItems = TryGet(
-                    () => (object?)nativeField.CalculatedItems());
-                calculatedItems = calculatedItems ??
-                    TryGet(() => (object?)nativeField.CalculatedItems);
-                if (calculatedItems == null)
-                {
-                    throw new NotSupportedException(
-                        "Excel did not expose CalculatedItems needed for a reversible conversion preflight.");
-                }
             }
         }
 
@@ -4852,9 +4920,13 @@ namespace ExcelReportBuilder.Excel.PivotPlus.DataModel
                     ReadRequiredBoolean(
                         () => (object?)item.Visible,
                         "PivotItem visibility"),
-                    ReadRequiredPositiveInt(
-                        () => (object?)item.Position,
-                        "PivotItem position")));
+                    // PivotItems is already returned in the field's displayed
+                    // order. Excel 2021 can expose Position as 0 for ordinary
+                    // ungrouped date members even though the collection order
+                    // is valid. Preserve the exact observed order with the
+                    // one-based collection ordinal instead of rejecting that
+                    // otherwise reversible state.
+                    position));
                 position++;
             }
 

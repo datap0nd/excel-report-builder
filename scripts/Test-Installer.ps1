@@ -783,8 +783,8 @@ function Assert-InstalledPerUserRegistration {
         [Parameter(Mandatory = $true)][string]$PaneClsid
     )
 
-    $appName = "Excel Report Builder"
-    $assemblyVersion = "0.2.0.0"
+    $appName = "PivotTable+"
+    $assemblyVersion = "0.2.1.0"
     $assemblyName = (
         "ExcelReportBuilder.AddIn, Version=$assemblyVersion, " +
         "Culture=neutral, PublicKeyToken=null")

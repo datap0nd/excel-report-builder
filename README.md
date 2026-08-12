@@ -2,7 +2,7 @@
 
 ## Download
 
-**[Download PivotTable+ for Windows (.exe)](https://github.com/datap0nd/excel-report-builder/releases/download/v0.2.0/ExcelReportBuilderSetup-0.2.0-unsigned.exe)**
+**[Download PivotTable+ for Windows (.exe)](https://github.com/datap0nd/excel-report-builder/releases/download/v0.2.1/ExcelReportBuilderSetup-0.2.1-unsigned.exe)**
 
 This is an unsigned prototype for Excel LTSC 2021 and compatible Microsoft 365
 desktop Excel. Close Excel before running the installer; no PC restart is

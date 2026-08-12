@@ -373,11 +373,12 @@ namespace ExcelReportBuilder.Excel.PivotPlus.DataModel
             bool recoveryRequired,
             Exception innerException)
             : base(
-                recoveryRequired
+                (recoveryRequired
                     ? "PivotTable+ could not enable the Data Model; the original PivotTable was preserved or restored, and generated cache dependencies were retained under durable recovery ownership."
                     : rollbackCompleted
                         ? "PivotTable+ could not enable the Data Model; the original PivotTable was preserved or restored."
-                        : "PivotTable+ could not enable the Data Model and cleanup did not complete.",
+                        : "PivotTable+ could not enable the Data Model and cleanup did not complete.") +
+                " Stage: " + failedStage + ". " + innerException.Message,
                 innerException)
         {
             FailedStage = failedStage;

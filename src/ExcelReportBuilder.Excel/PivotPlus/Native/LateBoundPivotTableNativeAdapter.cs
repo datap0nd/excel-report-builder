@@ -170,10 +170,9 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Native
                         "Excel did not expose the field-header state required for rollback."),
                     ValuesAxis = valuesAxis,
                     ValuesPosition = valuesPosition,
-                    PivotTableStyleName = ReadRequiredOptionalString(
-                        () => (object?)pivot.TableStyle2,
-                        "Excel did not expose the PivotTable style required for rollback."),
-                    SetPivotTableStyle = true,
+                    PivotTableStyleName = ReadPivotTableStyleName(pivot),
+                    SetPivotTableStyle = !string.IsNullOrWhiteSpace(
+                        ReadPivotTableStyleName(pivot)),
                     PreserveFormatting = ReadRequiredBoolean(
                         () => (object?)pivot.PreserveFormatting,
                         "Excel did not expose the preserve-formatting state required for rollback."),
@@ -191,18 +190,89 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Native
         {
             if (pivotTable == null) throw new ArgumentNullException(nameof(pivotTable));
             dynamic pivot = pivotTable;
+
             IReadOnlyList<object> dataFields = ReadCollection((object)pivot, "DataFields");
             object? dataPivotField = ReadDataPivotField(
                 pivot,
                 required: dataFields.Count > 1);
             var fields = dataFields
                 .Concat(ReadCollection((object)pivot, "PageFields"))
-                .Concat(ReadAreaCollection((object)pivot, "ColumnFields"))
-                .Concat(ReadAreaCollection((object)pivot, "RowFields"))
+                // Excel refuses to hide an outer compact-form hierarchy while
+                // an inner field is still visible.  Work from the innermost
+                // position back toward the outer field on both native axes.
+                .Concat(ReadAreaCollection((object)pivot, "ColumnFields").Reverse())
+                .Concat(ReadAreaCollection((object)pivot, "RowFields").Reverse())
                 .ToList();
 
-            foreach (object fieldObject in fields)
+            try
             {
+                foreach (object fieldObject in fields)
+                {
+                    dynamic field = fieldObject;
+                    if (IsClassic(sourceKind))
+                    {
+                        field.Orientation = OrientationHidden;
+                    }
+                    else
+                    {
+                        object? cubeObject = ReadObject(field, "CubeField");
+                        dynamic cube = cubeObject ?? fieldObject;
+                        cube.Orientation = OrientationHidden;
+                    }
+                }
+
+                if (dataPivotField != null)
+                {
+                    ((dynamic)dataPivotField).Orientation = OrientationHidden;
+                }
+            }
+            catch (Exception compatibilityFailure)
+            {
+                // ClearTable is destructive to classic grouped fields on Excel
+                // 2021: the generated Months/Quarters fields disappear and can
+                // no longer be restored by name. Use it only when ordered field
+                // removal is genuinely unavailable, never as the first choice.
+                try
+                {
+                    pivot.ClearTable();
+                    return;
+                }
+                catch (Exception clearTableFailure)
+                {
+                    throw new InvalidOperationException(
+                        "Excel could not clear the PivotTable layout using either " +
+                        "ordered field removal or ClearTable. Ordered removal: " +
+                        compatibilityFailure.Message + " | ClearTable: " +
+                        clearTableFailure.Message,
+                        clearTableFailure);
+                }
+            }
+        }
+
+        public void RemoveFieldsNotInPlan(
+            object pivotTable,
+            PivotSourceKind sourceKind,
+            IReadOnlyList<NativePivotFieldCommand> desiredFields)
+        {
+            if (pivotTable == null) throw new ArgumentNullException(nameof(pivotTable));
+            if (desiredFields == null) throw new ArgumentNullException(nameof(desiredFields));
+
+            dynamic pivot = pivotTable;
+            var desiredAxes = new HashSet<string>(
+                desiredFields
+                    .Where(item => item.Area != CorePivotFieldArea.Values)
+                    .Select(item => item.FieldName),
+                StringComparer.OrdinalIgnoreCase);
+
+            var visibleAxes = ReadCollection((object)pivot, "PageFields")
+                .Concat(ReadAreaCollection((object)pivot, "ColumnFields").Reverse())
+                .Concat(ReadAreaCollection((object)pivot, "RowFields").Reverse())
+                .ToList();
+            foreach (object fieldObject in visibleAxes)
+            {
+                string liveName = ReadFieldIdentity(fieldObject, sourceKind);
+                if (desiredAxes.Contains(liveName)) continue;
+
                 dynamic field = fieldObject;
                 if (IsClassic(sourceKind))
                 {
@@ -211,14 +281,23 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Native
                 else
                 {
                     object? cubeObject = ReadObject(field, "CubeField");
-                    dynamic cube = cubeObject ?? fieldObject;
-                    cube.Orientation = OrientationHidden;
+                    ((dynamic)(cubeObject ?? fieldObject)).Orientation = OrientationHidden;
                 }
             }
 
-            if (dataPivotField != null)
+            IReadOnlyList<NativePivotFieldCommand> desiredValues = desiredFields
+                .Where(item => item.Area == CorePivotFieldArea.Values)
+                .ToList();
+            foreach (object dataFieldObject in ReadCollection((object)pivot, "DataFields"))
             {
-                ((dynamic)dataPivotField).Orientation = OrientationHidden;
+                if (desiredValues.Any(command =>
+                        ExistingValueMatches(dataFieldObject, sourceKind, command)))
+                {
+                    continue;
+                }
+
+                dynamic dataField = dataFieldObject;
+                dataField.Orientation = OrientationHidden;
             }
         }
 
@@ -297,7 +376,6 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Native
                 throw new ArgumentException("The PivotTable snapshot is invalid.", nameof(snapshot));
             }
 
-            ClearLayout(pivotTable, native.SourceKind);
             if (native.SourceKind == PivotSourceKind.DataModel)
             {
                 DeleteCubeFieldsCreatedAfterSnapshot(
@@ -306,11 +384,10 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Native
                 RestoreCubeFieldCaptions(pivotTable, native.CubeFields);
             }
 
-            foreach (SnapshotField field in native.Fields
+            var restoreCommands = native.Fields
                          .OrderBy(item => AreaOrder(item.Area))
-                         .ThenBy(item => item.Position))
-            {
-                var command = new NativePivotFieldCommand
+                         .ThenBy(item => item.Position)
+                         .Select(field => new NativePivotFieldCommand
                 {
                     InstanceId = "rollback:" + field.Area + ":" +
                                  field.Position.ToString(CultureInfo.InvariantCulture),
@@ -325,14 +402,21 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Native
                     SubtotalMode = field.Subtotals.Length > 0 && field.Subtotals[0]
                         ? PivotSubtotalMode.Automatic
                         : PivotSubtotalMode.None
-                };
+                })
+                .ToList();
+
+            RemoveFieldsNotInPlan(pivotTable, native.SourceKind, restoreCommands);
+            foreach (NativePivotFieldCommand command in restoreCommands)
+            {
                 PlaceField(pivotTable, native.SourceKind, command);
-                if (field.Area == CorePivotFieldArea.Row)
+                if (command.Area == CorePivotFieldArea.Row)
                 {
                     dynamic visible = ResolvePlacedField(
                         (dynamic)pivotTable,
                         native.SourceKind,
                         command);
+                    SnapshotField field = native.Fields.Single(item =>
+                        item.Area == command.Area && item.Position == command.Position);
                     WriteSubtotals(visible, field.Subtotals);
                 }
             }
@@ -459,10 +543,14 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Native
                 "Excel applied the wrong column-stripe setting.");
             if (plan.Layout.SetPivotTableStyle)
             {
-                DemandEqual(
-                    plan.Layout.PivotTableStyleName ?? string.Empty,
-                    ReadOptionalString(pivot, "TableStyle2") ?? string.Empty,
-                    "Excel applied the wrong PivotTable style.");
+                string expectedStyle = plan.Layout.PivotTableStyleName ?? string.Empty;
+                string actualStyle = ReadPivotTableStyleName(pivot) ?? string.Empty;
+                if (!string.Equals(expectedStyle, actualStyle, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        "Excel applied the wrong PivotTable style. Expected '" +
+                        expectedStyle + "' but read back '" + actualStyle + "'.");
+                }
             }
 
 
@@ -501,13 +589,75 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Native
                     "A classic Values field requires a native aggregation.");
             }
 
-            dynamic sourceField = ResolvePivotField(pivot, command.FieldName);
-            dynamic dataField = pivot.AddDataField(
-                sourceField,
-                command.Caption,
-                command.ConsolidationFunction.Value);
+            object? existing = ReadCollection((object)pivot, "DataFields")
+                .FirstOrDefault(candidate =>
+                    ExistingValueMatches(candidate, PivotSourceKind.WorksheetTable, command));
+            dynamic dataField;
+            if (existing != null)
+            {
+                dataField = existing;
+                ApplyCaption(dataField, command.Caption, command.SetCaption);
+            }
+            else
+            {
+                dynamic sourceField = ResolvePivotField(pivot, command.FieldName);
+                dataField = pivot.AddDataField(
+                    sourceField,
+                    command.Caption,
+                    command.ConsolidationFunction.Value);
+            }
+
             dataField.Position = command.Position;
             ApplyNumberFormat(dataField, command.NumberFormatCode);
+        }
+
+        private static string ReadFieldIdentity(object fieldObject, PivotSourceKind sourceKind)
+        {
+            dynamic field = fieldObject;
+            if (IsClassic(sourceKind))
+            {
+                return ReadRequiredName(
+                    () => (object?)field.SourceName,
+                    "Excel did not expose a classic PivotField source name required for incremental mutation.");
+            }
+
+            object? cubeObject = ReadObject(field, "CubeField");
+            if (cubeObject == null)
+            {
+                throw new NotSupportedException(
+                    "Excel did not expose the CubeField identity required for incremental mutation.");
+            }
+
+            dynamic cube = cubeObject;
+            return ReadRequiredName(
+                () => (object?)cube.Name,
+                "Excel did not expose the CubeField name required for incremental mutation.");
+        }
+
+        private static bool ExistingValueMatches(
+            object dataFieldObject,
+            PivotSourceKind sourceKind,
+            NativePivotFieldCommand command)
+        {
+            dynamic dataField = dataFieldObject;
+            if (IsClassic(sourceKind))
+            {
+                int? function = command.ConsolidationFunction;
+                if (function.HasValue &&
+                    (!TryRead(() => (object?)dataField.Function, out object? rawFunction) ||
+                     rawFunction == null ||
+                     Convert.ToInt32(rawFunction, CultureInfo.InvariantCulture) != function.Value))
+                {
+                    return false;
+                }
+
+                if (MatchesAnyName(dataFieldObject, command.FieldName)) return true;
+                object? sourceField = ReadObject(dataField, "PivotField");
+                return sourceField != null && MatchesAnyName(sourceField, command.FieldName);
+            }
+
+            object? cubeObject = ReadObject(dataField, "CubeField");
+            return cubeObject != null && MatchesAnyName(cubeObject, command.FieldName);
         }
 
         private static void PlaceCubeValue(
@@ -1008,10 +1158,24 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Native
             foreach (object fieldObject in axisFields)
             {
                 dynamic field = fieldObject;
-                object calculatedItems = ReadRequiredObject(
-                    () => (object?)field.CalculatedItems(),
-                    "Excel did not expose a calculated-item collection required for safe mutation.");
-                if (ReadCollectionCount(calculatedItems, "calculated item") > 0)
+                object? calculatedItems = null;
+                if (!TryRead(
+                        () => (object?)field.CalculatedItems(),
+                        out calculatedItems) ||
+                    calculatedItems == null)
+                {
+                    TryRead(
+                        () => (object?)field.CalculatedItems,
+                        out calculatedItems);
+                }
+
+                // Excel 2021 and some Microsoft 365 builds raise 1004 instead of
+                // returning an empty CalculatedItems collection for an ordinary
+                // PivotField. A real calculated item makes the collection readable,
+                // so keep blocking non-empty collections but accept the host's
+                // documented "not available" shape for an ordinary field.
+                if (calculatedItems != null &&
+                    ReadCollectionCount(calculatedItems, "calculated item") > 0)
                 {
                     throw new NotSupportedException(
                         "Classic calculated items are not part of the safe native mutation contract.");
@@ -1229,12 +1393,11 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Native
         {
             if (valuesAxis == PivotValuesAxis.Automatic)
             {
-                object? automaticField = ReadDataPivotField(pivot, required: false);
-                if (automaticField != null)
-                {
-                    ((dynamic)automaticField).Orientation = OrientationHidden;
-                }
-
+                // With zero or one Values field Excel owns the hidden/implicit
+                // DataPivotField state.  Some real Excel builds expose that
+                // pseudo-field but reject an explicit Orientation = xlHidden
+                // write with error 1004.  Automatic therefore means no host
+                // write; the concrete Rows/Columns cases below remain exact.
                 return;
             }
 
@@ -1266,16 +1429,10 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Native
                 required: expectedAxis != PivotValuesAxis.Automatic || valueCount > 1);
             if (expectedAxis == PivotValuesAxis.Automatic)
             {
-                if (dataPivotField != null)
-                {
-                    DemandEqual(
-                        OrientationHidden,
-                        ReadRequiredInt(
-                            () => (object?)((dynamic)dataPivotField).Orientation,
-                            "Excel did not expose the Values pseudo-field orientation during verification."),
-                        "Excel applied an unexpected Values pseudo-field axis.");
-                }
-
+                // Automatic is valid only for zero/one Values fields.  Excel
+                // may expose its implicit DataPivotField with a host-specific
+                // orientation even though no Values axis is visible, so there
+                // is no stable orientation value to assert here.
                 return;
             }
 
@@ -1309,6 +1466,48 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Native
                 {
                     return index + 1;
                 }
+            }
+
+            // Excel can return a different RCW for PivotFields.Item(...) than
+            // it returns while enumerating RowFields/ColumnFields.  IUnknown
+            // identity is normally stable, but some Office 2021 builds proxy
+            // the two collection paths independently.  Fall back to the
+            // native source/CubeField identity, requiring one exact match so
+            // verification remains fail-closed rather than caption-based.
+            dynamic expectedField = field;
+            string? expectedSourceName = ReadOptionalString(expectedField, "SourceName");
+            object? expectedCube = ReadObject(expectedField, "CubeField");
+            string? expectedCubeName = expectedCube == null
+                ? null
+                : ReadOptionalString((dynamic)expectedCube, "Name");
+            var stableMatches = new List<int>();
+            for (var index = 0; index < fields.Count; index++)
+            {
+                dynamic candidate = fields[index];
+                string? candidateSourceName = ReadOptionalString(candidate, "SourceName");
+                object? candidateCube = ReadObject(candidate, "CubeField");
+                string? candidateCubeName = candidateCube == null
+                    ? null
+                    : ReadOptionalString((dynamic)candidateCube, "Name");
+                bool sourceMatch = !string.IsNullOrWhiteSpace(expectedSourceName) &&
+                    string.Equals(
+                        expectedSourceName,
+                        candidateSourceName,
+                        StringComparison.OrdinalIgnoreCase);
+                bool cubeMatch = !string.IsNullOrWhiteSpace(expectedCubeName) &&
+                    string.Equals(
+                        expectedCubeName,
+                        candidateCubeName,
+                        StringComparison.OrdinalIgnoreCase);
+                if (sourceMatch || cubeMatch)
+                {
+                    stableMatches.Add(index + 1);
+                }
+            }
+
+            if (stableMatches.Count == 1)
+            {
+                return stableMatches[0];
             }
 
             throw new InvalidOperationException(
@@ -1506,6 +1705,10 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Native
             {
                 case "CubeField":
                     return TryRead(() => (object?)owner.CubeField, out object? cube) ? cube : null;
+                case "PivotField":
+                    return TryRead(() => (object?)owner.PivotField, out object? pivotField)
+                        ? pivotField
+                        : null;
                 default:
                     throw new ArgumentOutOfRangeException(nameof(memberName));
             }
@@ -1544,13 +1747,48 @@ namespace ExcelReportBuilder.Excel.PivotPlus.Native
                 case "Caption": TryRead(() => (object?)owner.Caption, out value); break;
                 case "SourceName": TryRead(() => (object?)owner.SourceName, out value); break;
                 case "NumberFormat": TryRead(() => (object?)owner.NumberFormat, out value); break;
-                case "TableStyle2": TryRead(() => (object?)owner.TableStyle2, out value); break;
+                case "TableStyle2": return ReadPivotTableStyleName(owner);
                 default: throw new ArgumentOutOfRangeException(nameof(memberName));
             }
 
             return value == null
                 ? null
                 : Convert.ToString(value, CultureInfo.InvariantCulture);
+        }
+
+        private static string? ReadPivotTableStyleName(dynamic pivot)
+        {
+            if (!TryRead(() => (object?)pivot.TableStyle2, out object? value) ||
+                value == null)
+            {
+                return null;
+            }
+
+            if (value is string text)
+            {
+                return text;
+            }
+
+            // Depending on the Office PIA/build, TableStyle2 can late-bind as
+            // the style's name string or as a TableStyle RCW.  Persist and
+            // compare the native Name in either case.
+            dynamic style = value;
+            if (TryRead(() => (object?)style.Name, out object? name) && name != null)
+            {
+                string? resolvedName = Convert.ToString(name, CultureInfo.InvariantCulture);
+                if (!string.Equals(
+                        resolvedName,
+                        "System.__ComObject",
+                        StringComparison.Ordinal))
+                {
+                    return resolvedName;
+                }
+            }
+
+            string? fallback = Convert.ToString(value, CultureInfo.InvariantCulture);
+            return string.Equals(fallback, "System.__ComObject", StringComparison.Ordinal)
+                ? null
+                : fallback;
         }
 
         private static int ReadInt(dynamic owner, string memberName, int fallback)

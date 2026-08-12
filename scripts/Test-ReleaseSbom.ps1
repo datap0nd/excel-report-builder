@@ -9,7 +9,7 @@ param(
     [string]$PayloadPath,
 
     [ValidateNotNullOrEmpty()]
-    [string]$ExpectedProductName = "Excel Report Builder",
+    [string]$ExpectedProductName = "PivotTable+",
 
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^\d+\.\d+\.\d+$')]
@@ -200,34 +200,33 @@ function Get-FileEvidencePackages {
 $expectedComponents = @(
     [pscustomobject]@{
         RelativePath = "addin/ExcelReportBuilder.AddIn.dll"
-        # The COM host is deliberately branded PivotTable+ while the shared
-        # libraries and root release package retain the repository product name.
+        # Every first-party assembly is branded PivotTable+ in the release payload.
         PackageNames = @("PivotTable+")
         RuntimePackageName = $null
     },
     [pscustomobject]@{
         RelativePath = "addin/ExcelReportBuilder.Core.dll"
-        PackageNames = @("Excel Report Builder")
+        PackageNames = @("PivotTable+")
         RuntimePackageName = $null
     },
     [pscustomobject]@{
         RelativePath = "addin/ExcelReportBuilder.Excel.dll"
-        PackageNames = @("Excel Report Builder")
+        PackageNames = @("PivotTable+")
         RuntimePackageName = $null
     },
     [pscustomobject]@{
         RelativePath = "addin/ExcelReportBuilder.Agent.dll"
-        PackageNames = @("Excel Report Builder")
+        PackageNames = @("PivotTable+")
         RuntimePackageName = $null
     },
     [pscustomobject]@{
         RelativePath = "worker-x64/ExcelReportBuilder.Worker.exe"
-        PackageNames = @("Excel Report Builder", "ExcelReportBuilder.Worker")
+        PackageNames = @("PivotTable+", "ExcelReportBuilder.Worker")
         RuntimePackageName = "runtimepack.Microsoft.NETCore.App.Runtime.win-x64"
     },
     [pscustomobject]@{
         RelativePath = "worker-x86/ExcelReportBuilder.Worker.exe"
-        PackageNames = @("Excel Report Builder", "ExcelReportBuilder.Worker")
+        PackageNames = @("PivotTable+", "ExcelReportBuilder.Worker")
         RuntimePackageName = "runtimepack.Microsoft.NETCore.App.Runtime.win-x86"
     }
 )
@@ -271,7 +270,7 @@ foreach ($component in $expectedComponents) {
 
 $packageNames = @($packages | ForEach-Object { [string]$_.name })
 foreach ($requiredPackage in @(
-    "Excel Report Builder",
+    "PivotTable+",
     "Json.NET",
     "System.Text.Json"
 )) {

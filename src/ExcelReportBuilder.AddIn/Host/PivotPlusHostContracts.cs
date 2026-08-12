@@ -6,6 +6,14 @@ using ExcelReportBuilder.Core.PivotPlus;
 
 namespace ExcelReportBuilder.AddIn.Host
 {
+    public enum PivotDateGrouping
+    {
+        Months,
+        Quarters,
+        Years,
+        Ungrouped
+    }
+
     public sealed class PivotPlusFieldSnapshot
     {
         public PivotPlusFieldSnapshot(
@@ -78,7 +86,9 @@ namespace ExcelReportBuilder.AddIn.Host
         public PivotSourceKind SourceKind { get; }
         public IReadOnlyList<PivotPlusFieldSnapshot> Fields { get; }
         public IReadOnlyList<PivotPlusPlacementSnapshot> Placements { get; }
-        public bool SupportsExtras => SourceKind == PivotSourceKind.DataModel;
+        public bool SupportsExtras => SourceKind == PivotSourceKind.DataModel ||
+                                      SourceKind == PivotSourceKind.WorksheetTable ||
+                                      SourceKind == PivotSourceKind.WorksheetRange;
         public bool CanEnableDataModel => SourceKind == PivotSourceKind.WorksheetTable ||
                                           SourceKind == PivotSourceKind.WorksheetRange;
     }
@@ -124,6 +134,11 @@ namespace ExcelReportBuilder.AddIn.Host
             string valueFieldName,
             string detailFieldName,
             string measureCaption,
+            CancellationToken cancellationToken);
+
+        Task<PivotPlusPaneSnapshot> GroupDateAsync(
+            string fieldName,
+            PivotDateGrouping grouping,
             CancellationToken cancellationToken);
 
         Task<PivotPlusPaneSnapshot> UndoLastExtraAsync(

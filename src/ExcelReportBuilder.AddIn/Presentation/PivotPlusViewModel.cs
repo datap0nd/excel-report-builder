@@ -22,6 +22,10 @@ namespace ExcelReportBuilder.AddIn.Presentation
         public string Caption => Source.Caption;
         public bool IsMeasure => Source.IsMeasure;
         public string KindLabel => Source.IsMeasure ? "Measure" : "Field";
+
+        public bool IsPeriodField => PivotPlusPeriodFieldClassifier.IsPeriodField(Caption);
+
+        public int PeriodOrder => PivotPlusPeriodFieldClassifier.PeriodOrder(Caption);
     }
 
     public sealed class PivotPlusPlacementRow
@@ -63,6 +67,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
         private PivotPlusPlacementRow? selectedPlacement;
         private PivotPlusFieldRow? selectedPortionValueField;
         private PivotPlusFieldRow? selectedPortionDetailField;
+        private PivotPlusFieldRow? selectedPeriodField;
         private string portionCaption = "Portion %";
         private string searchText = string.Empty;
         private string targetLabel = "Select a cell inside a PivotTable";
@@ -71,6 +76,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
         private bool isBusy;
         private bool hasPendingChanges;
         private bool disposed;
+        private string snapshotSignature = string.Empty;
 
         public PivotPlusViewModel(IPivotPlusHostService hostService)
         {
@@ -84,12 +90,14 @@ namespace ExcelReportBuilder.AddIn.Presentation
             EnableDataModelCommand = new AsyncRelayCommand(EnableDataModelAsync, () => CanEnableDataModel && !IsBusy);
             AddPortionCommand = new AsyncRelayCommand(AddPortionAsync, CanAddPortion);
             UndoCommand = new AsyncRelayCommand(UndoAsync, () => snapshot != null && !IsBusy);
+            GroupDateCommand = new AsyncRelayCommand(GroupDateAsync, CanGroupDate);
             OpenExcelFieldListCommand = new RelayCommand(OpenExcelFieldList, () => !IsBusy);
         }
 
         public ObservableCollection<PivotPlusFieldRow> Fields { get; } = new ObservableCollection<PivotPlusFieldRow>();
         public ObservableCollection<PivotPlusFieldRow> PortionValueFields { get; } = new ObservableCollection<PivotPlusFieldRow>();
         public ObservableCollection<PivotPlusFieldRow> PortionDetailFields { get; } = new ObservableCollection<PivotPlusFieldRow>();
+        public ObservableCollection<PivotPlusFieldRow> PeriodFields { get; } = new ObservableCollection<PivotPlusFieldRow>();
         public ObservableCollection<PivotPlusPlacementRow> Filters { get; } = new ObservableCollection<PivotPlusPlacementRow>();
         public ObservableCollection<PivotPlusPlacementRow> Columns { get; } = new ObservableCollection<PivotPlusPlacementRow>();
         public ObservableCollection<PivotPlusPlacementRow> Rows { get; } = new ObservableCollection<PivotPlusPlacementRow>();
@@ -104,6 +112,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
         public ICommand EnableDataModelCommand { get; }
         public ICommand AddPortionCommand { get; }
         public ICommand UndoCommand { get; }
+        public ICommand GroupDateCommand { get; }
         public ICommand OpenExcelFieldListCommand { get; }
 
         public string SearchText
@@ -199,9 +208,50 @@ namespace ExcelReportBuilder.AddIn.Presentation
         public bool SupportsExtras => snapshot?.SupportsExtras == true;
         public bool CanEnableDataModel => snapshot?.CanEnableDataModel == true;
 
+        public bool HasPeriodFields => PeriodFields.Count > 0;
+
+        public string PeriodSummary => HasPeriodFields
+            ? PeriodFields.Count + " date/period fields detected"
+            : "No date/period fields detected";
+
         public Task InitializeAsync()
         {
             return RefreshAsync();
+        }
+
+        public PivotPlusFieldRow? SelectedPeriodField
+        {
+            get => selectedPeriodField;
+            set
+            {
+                if (SetProperty(ref selectedPeriodField, value)) RaiseCommandStates();
+            }
+        }
+
+        public async Task SyncAsync()
+        {
+            if (disposed || IsBusy || HasPendingChanges) return;
+
+            try
+            {
+                PivotPlusPaneSnapshot next = await hostService
+                    .InspectAsync(lifetime.Token)
+                    .ConfigureAwait(true);
+                string signature = SnapshotSignature(next);
+                if (!string.Equals(signature, snapshotSignature, StringComparison.Ordinal))
+                {
+                    LoadSnapshot(next);
+                    StatusMessage = "Synced with Excel.";
+                }
+            }
+            catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+            {
+            }
+            catch (Exception)
+            {
+                // Auto-sync is opportunistic. Explicit commands continue to surface
+                // actionable errors in the status region.
+            }
         }
 
         public void Dispose()
@@ -261,6 +311,24 @@ namespace ExcelReportBuilder.AddIn.Presentation
                 "The last PivotTable+ extra was undone.").ConfigureAwait(true);
         }
 
+        private async Task GroupDateAsync(object? parameter)
+        {
+            PivotPlusFieldRow field = SelectedPeriodField ??
+                throw new InvalidOperationException("Choose a date or period field.");
+            if (!Enum.TryParse(Convert.ToString(parameter), true, out PivotDateGrouping grouping))
+            {
+                throw new ArgumentException("Choose Month, Quarter, Year, or Ungrouped.");
+            }
+
+            await RunHostOperationAsync(
+                "Updating native Excel date grouping…",
+                token => hostService.GroupDateAsync(field.Name, grouping, token),
+                grouping == PivotDateGrouping.Ungrouped
+                    ? "Date grouping removed."
+                    : "Dates grouped by " + grouping.ToString().ToLowerInvariant() + ".")
+                .ConfigureAwait(true);
+        }
+
         private async Task RunHostOperationAsync(
             string progress,
             Func<CancellationToken, Task<PivotPlusPaneSnapshot>> operation,
@@ -281,7 +349,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             }
             catch (Exception exception)
             {
-                StatusMessage = exception.Message;
+                StatusMessage = FormatOperationError(exception);
             }
             finally
             {
@@ -299,6 +367,11 @@ namespace ExcelReportBuilder.AddIn.Presentation
             RefreshFieldFilter();
             Replace(PortionValueFields, allFields.Where(field => !field.IsMeasure));
             Replace(PortionDetailFields, allFields.Where(field => !field.IsMeasure));
+            Replace(
+                PeriodFields,
+                allFields.Where(field => field.IsPeriodField)
+                    .OrderBy(field => field.PeriodOrder)
+                    .ThenBy(field => field.Caption, StringComparer.CurrentCultureIgnoreCase));
             Replace(Filters, CreateAreaRows(next, PivotFieldArea.Filter));
             Replace(Columns, CreateAreaRows(next, PivotFieldArea.Column));
             Replace(Rows, CreateAreaRows(next, PivotFieldArea.Row));
@@ -311,9 +384,120 @@ namespace ExcelReportBuilder.AddIn.Presentation
             SelectedPortionDetailField = PortionDetailFields.FirstOrDefault(field =>
                 Rows.Any(row => string.Equals(row.FieldName, field.Name, StringComparison.OrdinalIgnoreCase)))
                 ?? PortionDetailFields.FirstOrDefault();
+            SelectedPeriodField = PeriodFields.FirstOrDefault(field =>
+                Columns.Concat(Rows).Any(item =>
+                    string.Equals(item.FieldName, field.Name, StringComparison.OrdinalIgnoreCase)))
+                ?? PeriodFields.FirstOrDefault();
             HasPendingChanges = false;
+            snapshotSignature = SnapshotSignature(next);
             RaisePropertyChanged(nameof(SupportsExtras));
             RaisePropertyChanged(nameof(CanEnableDataModel));
+            RaisePropertyChanged(nameof(HasPeriodFields));
+            RaisePropertyChanged(nameof(PeriodSummary));
+        }
+
+        private static string FormatOperationError(Exception exception)
+        {
+            if (exception is ExcelReportBuilder.Excel.PivotPlus.PivotMutationException mutation)
+            {
+                Exception cause = mutation.InnerException ?? mutation;
+                while (cause.InnerException != null && cause is not AggregateException)
+                {
+                    cause = cause.InnerException;
+                }
+
+                string detail = cause is AggregateException aggregate
+                    ? string.Join(" | ", aggregate.Flatten().InnerExceptions.Select(item => item.Message))
+                    : cause.Message;
+                return mutation.Message + " Stage: " + mutation.FailedStep + ". " + detail;
+            }
+
+            return exception.Message;
+        }
+
+        public void DropFields(
+            IEnumerable<PivotPlusFieldRow> fields,
+            PivotFieldArea area,
+            int insertionIndex)
+        {
+            if (fields == null) return;
+            ObservableCollection<PivotPlusPlacementRow> target = AreaCollection(area);
+            int nextIndex = Math.Max(0, Math.Min(insertionIndex, target.Count));
+            bool changed = false;
+            foreach (PivotPlusFieldRow field in fields.Distinct())
+            {
+                if (!SupportsArea(field.Source.SupportedAreas, area))
+                {
+                    StatusMessage = field.Caption + " cannot be placed in " + AreaLabel(area) + ".";
+                    continue;
+                }
+
+                if (area != PivotFieldArea.Values && target.Any(item =>
+                    string.Equals(item.FieldName, field.Name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                target.Insert(nextIndex++, new PivotPlusPlacementRow(field, area));
+                changed = true;
+            }
+
+            if (changed)
+            {
+                SelectedPlacement = target[Math.Max(0, nextIndex - 1)];
+                MarkPreviewChanged();
+            }
+        }
+
+        public void MovePlacement(
+            PivotPlusPlacementRow placement,
+            PivotFieldArea targetArea,
+            int insertionIndex)
+        {
+            if (placement == null) return;
+            PivotPlusFieldRow? field = allFields.FirstOrDefault(item =>
+                string.Equals(item.Name, placement.FieldName, StringComparison.OrdinalIgnoreCase));
+            if (field == null || !SupportsArea(field.Source.SupportedAreas, targetArea))
+            {
+                StatusMessage = placement.Caption + " cannot be placed in " + AreaLabel(targetArea) + ".";
+                return;
+            }
+
+            ObservableCollection<PivotPlusPlacementRow> source = AreaCollection(placement.Area);
+            ObservableCollection<PivotPlusPlacementRow> target = AreaCollection(targetArea);
+            int sourceIndex = source.IndexOf(placement);
+            if (sourceIndex < 0) return;
+            if (targetArea != PivotFieldArea.Values && target.Any(item =>
+                !ReferenceEquals(item, placement) &&
+                string.Equals(item.FieldName, placement.FieldName, StringComparison.OrdinalIgnoreCase)))
+            {
+                StatusMessage = placement.Caption + " is already in " + AreaLabel(targetArea) + ".";
+                return;
+            }
+
+            source.RemoveAt(sourceIndex);
+            int targetIndex = Math.Max(0, Math.Min(insertionIndex, target.Count));
+            if (ReferenceEquals(source, target) && sourceIndex < insertionIndex)
+            {
+                targetIndex = Math.Max(0, targetIndex - 1);
+            }
+
+            PivotPlusPlacementRow moved = ReferenceEquals(source, target)
+                ? placement
+                : new PivotPlusPlacementRow(field, targetArea);
+            target.Insert(targetIndex, moved);
+            SelectedPlacement = moved;
+            MarkPreviewChanged();
+        }
+
+        public void RemovePlacement(PivotPlusPlacementRow placement)
+        {
+            if (placement == null) return;
+            if (AreaCollection(placement.Area).Remove(placement))
+            {
+                SelectedPlacement = null;
+                MarkPreviewChanged();
+            }
         }
 
         private void RefreshFieldFilter()
@@ -437,6 +621,11 @@ namespace ExcelReportBuilder.AddIn.Presentation
                    SelectedPortionDetailField != null && !IsBusy;
         }
 
+        private bool CanGroupDate(object? parameter)
+        {
+            return SelectedPeriodField != null && parameter != null && !IsBusy;
+        }
+
         private void RaiseCommandStates()
         {
             (RefreshCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
@@ -448,6 +637,7 @@ namespace ExcelReportBuilder.AddIn.Presentation
             (EnableDataModelCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
             (AddPortionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
             (UndoCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+            (GroupDateCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
             (OpenExcelFieldListCommand as RelayCommand)?.RaiseCanExecuteChanged();
         }
 
@@ -508,6 +698,63 @@ namespace ExcelReportBuilder.AddIn.Presentation
         {
             target.Clear();
             foreach (T value in values) target.Add(value);
+        }
+
+        private static string SnapshotSignature(PivotPlusPaneSnapshot value)
+        {
+            return string.Join("\u001f", new[]
+            {
+                value.WorksheetName,
+                value.PivotTableName,
+                value.SourceKind.ToString(),
+                string.Join("\u001e", value.Fields.Select(field =>
+                    field.Name + "\u001d" + field.Caption + "\u001d" + field.SupportedAreas)),
+                string.Join("\u001e", value.Placements
+                    .OrderBy(item => item.Area)
+                    .ThenBy(item => item.Position)
+                    .Select(item => item.Area + "\u001d" + item.Position + "\u001d" +
+                        item.FieldName + "\u001d" + item.Caption + "\u001d" +
+                        item.Aggregation + "\u001d" + item.NumberFormatCode))
+            });
+        }
+    }
+
+    internal static class PivotPlusPeriodFieldClassifier
+    {
+        private static readonly string[] Months =
+        {
+            "jan", "feb", "mar", "apr", "may", "jun",
+            "jul", "aug", "sep", "oct", "nov", "dec"
+        };
+
+        public static bool IsPeriodField(string caption)
+        {
+            string normalized = Normalize(caption);
+            return PeriodOrder(normalized) < 100 ||
+                   normalized.Contains("date") ||
+                   normalized.Contains("month") ||
+                   normalized.Contains("quarter") ||
+                   normalized.Contains("year") ||
+                   normalized.Contains("period");
+        }
+
+        public static int PeriodOrder(string caption)
+        {
+            string normalized = Normalize(caption);
+            for (int index = 0; index < Months.Length; index++)
+            {
+                if (normalized == Months[index] || normalized.StartsWith(Months[index] + " "))
+                {
+                    return index + 1;
+                }
+            }
+
+            return 100;
+        }
+
+        private static string Normalize(string value)
+        {
+            return (value ?? string.Empty).Trim().ToLowerInvariant();
         }
     }
 }

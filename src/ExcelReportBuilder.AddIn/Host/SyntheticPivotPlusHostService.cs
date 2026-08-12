@@ -89,6 +89,15 @@ namespace ExcelReportBuilder.AddIn.Host
             return Task.FromResult(snapshot);
         }
 
+        public Task<PivotPlusPaneSnapshot> GroupDateAsync(
+            string fieldName,
+            PivotDateGrouping grouping,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(snapshot);
+        }
+
         public Task<PivotPlusPaneSnapshot> UndoLastExtraAsync(CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();

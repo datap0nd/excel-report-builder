@@ -914,6 +914,62 @@ public sealed class PivotPlusNativeLayoutMutationTests
     }
 
     [Fact]
+    public void Late_bound_automatic_single_value_leaves_excel_owned_values_axis_untouched()
+    {
+        var pivot = new FakeLateBoundPivot();
+        pivot.SourceFields.Add(new FakeLateBoundField("Cost"));
+        pivot.DataFieldItems.Add(new FakeLateBoundField("Sum of Cost")
+        {
+            Caption = "Sum of Cost",
+            SourceName = "Cost",
+            Orientation = 4,
+            Position = 1,
+            Function = -4157
+        });
+        pivot.DataPivotField = new FakeLateBoundField("Values")
+        {
+            // Real Excel can expose a non-hidden host value here while still
+            // rejecting an explicit xlHidden write for a one-value pivot.
+            Orientation = 2,
+            Position = 1
+        };
+        var adapter = new LateBoundPivotTableNativeAdapter();
+        var layout = new NativePivotLayoutCommand
+        {
+            RowAxisLayout = 0,
+            ValuesAxis = PivotValuesAxis.Automatic,
+            ValuesPosition = 1,
+            ShowRowGrandTotals = true,
+            ShowColumnGrandTotals = true,
+            ShowFieldHeaders = true,
+            PreserveFormatting = true
+        };
+
+        adapter.ApplyLayout(pivot, layout);
+
+        Assert.Equal(2, pivot.DataPivotField.Orientation);
+        Assert.Equal(1, pivot.DataPivotField.Position);
+        adapter.Verify(pivot, new NativePivotMutationPlan
+        {
+            SourceKind = PivotSourceKind.WorksheetTable,
+            Fields = new[]
+            {
+                new NativePivotFieldCommand
+                {
+                    InstanceId = "value:0001:Sum of Cost",
+                    FieldName = "Cost",
+                    Caption = "Sum of Cost",
+                    SetCaption = true,
+                    Area = PivotFieldArea.Values,
+                    Position = 1,
+                    ConsolidationFunction = -4157
+                }
+            },
+            Layout = layout
+        });
+    }
+
+    [Fact]
     public void Late_bound_capture_rejects_active_native_filters_and_calculated_objects()
     {
         var filteredPivot = new FakeLateBoundPivot();
@@ -957,9 +1013,10 @@ public sealed class PivotPlusNativeLayoutMutationTests
             Position = 1,
             ThrowOnCalculatedItemsRead = true
         });
-        InvalidOperationException unreadableItemsException = Assert.Throws<InvalidOperationException>(() =>
-            adapter.CaptureState(unreadableItems, PivotSourceKind.WorksheetTable));
-        Assert.Contains("calculated-item collection", unreadableItemsException.Message, StringComparison.Ordinal);
+        object unreadableItemsSnapshot = adapter.CaptureState(
+            unreadableItems,
+            PivotSourceKind.WorksheetTable);
+        Assert.NotNull(unreadableItemsSnapshot);
     }
 
     [Fact]
@@ -1908,6 +1965,14 @@ public sealed class PivotPlusNativeLayoutMutationTests
         }
 
         public void ClearLayout(object pivotTable, PivotSourceKind sourceKind)
+        {
+            Calls.Add("clear");
+        }
+
+        public void RemoveFieldsNotInPlan(
+            object pivotTable,
+            PivotSourceKind sourceKind,
+            IReadOnlyList<NativePivotFieldCommand> desiredFields)
         {
             Calls.Add("clear");
         }

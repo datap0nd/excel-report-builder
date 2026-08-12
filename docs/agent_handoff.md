@@ -2,10 +2,12 @@
 
 ## Current Objective
 
-Tasks 1-11 are complete on `codex/pivottable-plus`. Task 11 replaces the old
-workbench at the COM composition boundary with the compact, keyboard-accessible
-PivotTable+ pane and Ribbon actions. A local unsigned 0.2.0.1 candidate is
-installed and registered on the development PC.
+Tasks 1-11 are complete on `main`. Release candidate 0.2.1 repairs the first
+live-user workflow: the compact PivotTable+ pane now stays synchronized with
+the selected native PivotTable, supports drag-and-drop field placement, groups
+ordinary PivotTable date fields, and adds a native `Portion %` value without
+requiring Data Model conversion. The unsigned 0.2.1 installer is installed and
+live-tested on the development PC.
 
 The next numbered task is Task 12: reframe the optional local-model workflow as
 a typed PivotTable+ proposal and preview flow. It must not apply without an
@@ -13,11 +15,11 @@ explicit user action.
 
 ## Repository State
 
-- Branch: `codex/pivottable-plus`
+- Branch: `main`
 - Tasks 1-11 in `plan.md` are complete; Tasks 12-14 remain.
-- Task 9 was implemented and verified without controlling the Excel UI or using
-  computer automation. All repository evidence uses generated synthetic data
-  and generic names.
+- Live Excel and installer checks used generated synthetic data and local,
+  ignored evidence only. No workbook or screenshot is tracked in the public
+  repository.
 - The PivotTable+ rebuild remains intentionally incomplete until Tasks 12-14
   are implemented and verified.
 
@@ -112,8 +114,8 @@ explicit user action.
 
 - Release builds complete with zero warnings and zero errors for both Excel
   target frameworks: .NET Framework 4.8 and .NET Standard 2.0.
-- The final automated suite has 1,025 passing tests: 244 Core, 98 Agent, and
-  683 Excel tests.
+- The final automated suite has 1,028 passing tests: 244 Core, 98 Agent, and
+  686 Excel tests.
 - Coverage includes validation, read-only discovery, session identity,
   classic and OLAP layout planning, fail-closed COM capture, exact verification
   and rollback, schema 1.3 ownership, raw-range binding, interrupted conversion
@@ -186,31 +188,40 @@ explicit user action.
 - The pane reads only the PivotTable under the active cell, searches its field
   catalog, shows familiar Filters/Columns/Rows/Values areas, and holds edits as
   a preview until the user chooses Apply.
-- Excel's built-in PivotTable Fields pane remains the primary drag-and-drop
-  workflow and is available from both the PivotTable+ pane and Ribbon.
-- An explicit Enable PivotTable+ action invokes the verified Task 9
-  classic-to-Data-Model conversion. The first visible extra is a typed parent
-  Portion measure with session Undo; it never accepts raw DAX or creates a
-  helper table.
+- The pane itself now supports drag-and-drop between its searchable field list
+  and Filters, Columns, Rows, and Values. Changes remain a preview until Apply;
+  successful Apply updates the native PivotTable and Excel Field List. Native
+  Excel changes are detected and synchronized back into the pane.
+- `Dates & periods` groups an ordinary PivotTable date field by month, quarter,
+  or year. `Portion %` duplicates the selected native value field and applies
+  Excel's native percent-of-parent-row calculation, keeps the result in the
+  same PivotTable, and supports session Undo.
+- All extras are collapsed by default. The optional Data Model conversion is
+  isolated under `Advanced engine`; failure preserves or restores the original
+  PivotTable.
 - The rendered 420-by-900 synthetic pane was inspected. The task-pane contract,
   COM contract, public-safety check, dual-target AddIn build, and the full 1,025
   test suite pass.
-- Inno Setup 6.7.1 built unsigned candidate `0.2.0.1`. Installation completed
-  without a Windows restart. Installed AddIn/Core/Excel/Agent DLL hashes match
-  the Release payload, both registry views have `FriendlyName=PivotTable+` and
-  `LoadBehavior=3`, and both 32-bit and 64-bit PowerShell successfully activate
-  the add-in and ActiveX task-pane COM classes.
-- No Excel UI was controlled during verification. The user must perform the
-  final visible open-pane and PivotTable interaction check.
+- Inno Setup built unsigned candidate `0.2.1`. A complete uninstall and clean
+  install were performed without a Windows restart. After all Excel and setup
+  processes were closed, a true cold start loaded the PivotTable+ Ribbon and
+  task pane.
+- Live Microsoft 365 Excel checks passed for pane startup, collapsed extras,
+  drag Category to Filters plus Apply, native Field List synchronization,
+  month grouping, native `Portion %`, and Portion Undo. The installed AddIn DLL
+  SHA-256 matches the staged Release DLL.
 
 ## Remaining Boundary and Next Step
 
-- Automated tests use synthetic late-bound hosts and do not replace live Excel
-  evidence. No Excel UI or computer control was used for Task 9.
-- Live smoke coverage for Excel LTSC 2021 and Microsoft 365 remains part of
-  Task 14. The main host risks are COM/RCW identity behavior, Values
-  pseudo-field placement, PivotCache replacement, provider and Data Model
-  differences, refresh timing, and rollback after real-host COM failures.
+- The optional classic-to-Data-Model conversion is not certified by this live
+  run. This PC has mismatched local Office Power Query components and the host
+  rejects conversion; PivotTable+ preserves/restores the original PivotTable.
+  Drag/drop, live sync, date grouping, and `Portion %` deliberately no longer
+  depend on that conversion.
+- LTSC 2021 and Microsoft 365 Data Model/provider smoke coverage remains part
+  of Task 14. The main outstanding host risks are PivotCache replacement,
+  provider differences, refresh timing, and rollback after real-host COM
+  failures.
 - Task 12 will map local-model requests to the same typed calculations, named
   sets, and layout plan. It must not expose arbitrary DAX, MDX, formulas, COM,
   filesystem, save, publish, or deletion capabilities to the model.
