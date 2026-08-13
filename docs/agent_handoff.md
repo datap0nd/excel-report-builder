@@ -185,6 +185,10 @@ explicit user action.
 - The COM task-pane host now composes `PivotPlusView` and
   `ExcelPivotPlusHostService`; the old report workbench is no longer reachable
   from the Ribbon or task-pane bootstrapper.
+- The PivotTable+ content surface occupies the pane's bounded star-sized grid
+  row, while the status strip occupies its auto-sized footer row. Content that
+  exceeds the available pane height therefore exposes the vertical scrollbar.
+  The task-pane contract checks these row assignments to prevent regression.
 - The pane reads only the PivotTable under the active cell, searches its field
   catalog, shows familiar Filters/Columns/Rows/Values areas, and holds edits as
   a preview until the user chooses Apply.
