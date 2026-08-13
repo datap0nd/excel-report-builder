@@ -2,12 +2,13 @@
 
 ## Current Objective
 
-Tasks 1-11 are complete on `main`. Release candidate 0.2.1 repairs the first
+Tasks 1-11 are complete on `main`. Release candidate 0.2.2 repairs the first
 live-user workflow: the compact PivotTable+ pane now stays synchronized with
 the selected native PivotTable, supports drag-and-drop field placement, groups
 ordinary PivotTable date fields, and adds a native `Portion %` value without
-requiring Data Model conversion. The unsigned 0.2.1 installer is installed and
-live-tested on the development PC.
+requiring Data Model conversion. It also keeps the pane content vertically
+scrollable at compact heights. The prior unsigned 0.2.1 installer was installed
+and live-tested on the development PC.
 
 The next numbered task is Task 12: reframe the optional local-model workflow as
 a typed PivotTable+ proposal and preview flow. It must not apply without an
