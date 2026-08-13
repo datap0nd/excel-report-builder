@@ -23,6 +23,8 @@ $requiredXaml = @(
     'MinHeight="480"',
     'AutomationProperties.Name="PivotTable Plus pane"',
     'AutomationProperties.LiveSetting="Polite"',
+    'ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"',
+    '<Border Grid.Row="2"',
     'Text="PivotTable Fields"',
     'Content="Open Excel Field List"',
     'Text="Drag one or more fields into Filters, Columns, Rows, or Values. Drag placed fields to reorder or move them."',

@@ -132,7 +132,7 @@
             </Grid>
         </Border>
 
-        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Margin="12,10,12,16">
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -338,7 +338,7 @@
             </StackPanel>
         </ScrollViewer>
 
-        <Border Grid.Row="1"
+        <Border Grid.Row="2"
                 Background="{StaticResource Subtle}"
                 BorderBrush="{StaticResource Rule}"
                 BorderThickness="0,0,0,1"
