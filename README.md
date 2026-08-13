@@ -2,7 +2,7 @@
 
 ## Download
 
-**[Download PivotTable+ for Windows (.exe)](https://github.com/datap0nd/excel-report-builder/releases/download/v0.2.1/ExcelReportBuilderSetup-0.2.1-unsigned.exe)**
+**[Download PivotTable+ for Windows (.exe)](https://github.com/datap0nd/excel-report-builder/releases/download/v0.2.2/ExcelReportBuilderSetup-0.2.2-unsigned.exe)**
 
 This is an unsigned prototype for Excel LTSC 2021 and compatible Microsoft 365
 desktop Excel. Close Excel before running the installer; no PC restart is
@@ -24,7 +24,7 @@ The development branch includes:
 - selected-PivotTable discovery for worksheet, Data Model, and external OLAP
   sources;
 - a familiar Rows, Columns, Values, and Filters pane with explicit preview and
-  Apply;
+  Apply, including vertical scrolling in a compact task pane;
 - a direct button for Excel's built-in PivotTable Fields pane;
 - verified classic-to-Data-Model enablement with durable recovery;
 - typed DAX measures for ratios, portions, variance, comparisons, and period
